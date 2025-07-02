@@ -201,7 +201,8 @@ add_library(ggml-base
             ggml-threading.h
             ggml-quants.c
             ggml-quants.h
-            gguf.cpp)
+            gguf.cpp
+            )
 
 target_include_directories(ggml-base PRIVATE .)
 if (GGML_BACKEND_DL)

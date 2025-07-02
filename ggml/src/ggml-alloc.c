@@ -73,6 +73,20 @@ static size_t aligned_offset(const void * buffer, size_t offset, size_t alignmen
 }
 
 // tallocr
+struct ggml_tallocr my_ggml_tallocr_new(ggml_backend_buffer_t buffer) {
+    void * base = ggml_backend_buffer_get_base(buffer);
+    size_t align = LXM_ALIGNMENT;//align
+
+    assert(align && !(align & (align - 1))); // power of 2
+
+    struct ggml_tallocr talloc = (struct ggml_tallocr) {
+        /*.buffer    = */ buffer,
+        /*.base      = */ base,
+        /*.alignment = */ align,
+        /*.offset    = */ aligned_offset(base, 0, align),
+    };
+    return talloc;
+}
 
 struct ggml_tallocr ggml_tallocr_new(ggml_backend_buffer_t buffer) {
     void * base = ggml_backend_buffer_get_base(buffer);
@@ -89,9 +103,64 @@ struct ggml_tallocr ggml_tallocr_new(ggml_backend_buffer_t buffer) {
     return talloc;
 }
 
-enum ggml_status ggml_tallocr_alloc(struct ggml_tallocr * talloc, struct ggml_tensor * tensor) {
-    size_t size = ggml_backend_buffer_get_alloc_size(talloc->buffer, tensor);
-    size = GGML_PAD(size, talloc->alignment);
+//lxm： 特殊处理expert的size（为每个专家都pad内存，方便后面的读取）
+// utils
+// 手动解析类似 "blk.12.ffn_gate_exps.weight" 这样的字符串
+int parse_blk_ffn_exps(const char *str, int *layer_id, int *m) {
+    const char *prefix = "blk.";
+    const char *suffix_gate = ".ffn_gate_exps.weight";
+    const char *suffix_up   = ".ffn_up_exps.weight";
+    const char *suffix_down = ".ffn_down_exps.weight";
+
+    if (strncmp(str, prefix, strlen(prefix)) != 0) {
+        return 0; // 不匹配前缀
+    }
+
+    // 查找第一个 '.' 后面的数字部分
+    const char *dot = strchr(str + strlen(prefix), '.');
+    if (dot == NULL) {
+        return 0; // 没有第二个点
+    }
+
+    // 提取 layer_id 字符串
+    size_t len = dot - (str + strlen(prefix));
+    char num_str[16];
+    memcpy(num_str, str + strlen(prefix), len);
+    num_str[len] = '\0';
+
+    char *endptr;
+    long lid = strtol(num_str, &endptr, 10);
+    if (*endptr != '\0') {
+        return 0; // 非法数字格式
+    }
+
+    // 判断后缀
+    if (strstr(str, suffix_gate) != NULL) {
+        *m = 0; // gate
+    } else if (strstr(str, suffix_up) != NULL) {
+        *m = 1; // up
+    } else if (strstr(str, suffix_down) != NULL) {
+        *m = 2; // down
+    } else {
+        return 0; // 不是任何一种模式
+    }
+
+    *layer_id = (int)lid;
+    return 1; // 匹配成功
+}
+
+
+
+enum ggml_status my_ggml_tallocr_alloc(struct ggml_tallocr * talloc, struct ggml_tensor * tensor) {
+    size_t size = ggml_backend_buffer_get_alloc_size(talloc->buffer, tensor);//原本的大小
+    int layer_id, m;
+    if(parse_blk_ffn_exps(ggml_get_name(tensor), &layer_id, &m)) {//每一层的大小缩减到reduction
+        //重新设定tensor大小，ne[2]:64->6 nb[2]:ne[1]*nb[1]
+        size = GGML_PAD(size / tensor->ne[2], LXM_ALIGNMENT) * tensor->ne[2];//为每个专家都留pad内存，方便后面的读取
+    } else
+    {
+        size = GGML_PAD(size, LXM_ALIGNMENT);//一样的放大
+    }
 
     if (talloc->offset + size > ggml_backend_buffer_get_size(talloc->buffer)) {
         GGML_LOG_ERROR("%s: not enough space in the buffer to allocate %s (needed %zu, available %zu)\n",
@@ -99,7 +168,26 @@ enum ggml_status ggml_tallocr_alloc(struct ggml_tallocr * talloc, struct ggml_te
         GGML_ABORT("not enough space in the buffer");
     }
 
-    void * addr = (char *)ggml_backend_buffer_get_base(talloc->buffer) + talloc->offset;
+    void * addr = (char *)ggml_backend_buffer_get_base(talloc->buffer) + talloc->offset;//LXM_ALIGNMENT对齐的地址: base+offset
+    talloc->offset += size;
+
+    assert(((uintptr_t)addr % LXM_ALIGNMENT) == 0);
+
+    return ggml_backend_tensor_alloc(talloc->buffer, tensor, addr);
+}
+
+
+enum ggml_status ggml_tallocr_alloc(struct ggml_tallocr * talloc, struct ggml_tensor * tensor) {
+    size_t size = ggml_backend_buffer_get_alloc_size(talloc->buffer, tensor);
+    size = GGML_PAD(size, talloc->alignment);//buffer已经分配了对齐后大小的buffer，所以这里计算32对齐的size
+
+    if (talloc->offset + size > ggml_backend_buffer_get_size(talloc->buffer)) {
+        GGML_LOG_ERROR("%s: not enough space in the buffer to allocate %s (needed %zu, available %zu)\n",
+                __func__, tensor->name, size, ggml_backend_buffer_get_size(talloc->buffer) - talloc->offset);
+        GGML_ABORT("not enough space in the buffer");
+    }
+
+    void * addr = (char *)ggml_backend_buffer_get_base(talloc->buffer) + talloc->offset;//32对齐的地址 base+offset
     talloc->offset += size;
 
     assert(((uintptr_t)addr % talloc->alignment) == 0);
@@ -936,6 +1024,7 @@ size_t ggml_gallocr_get_buffer_size(ggml_gallocr_t galloc, int buffer_id) {
 
 // utils
 
+
 static void free_buffers(ggml_backend_buffer_t ** buffers, const size_t * n_buffers) {
     for (size_t i = 0; i < *n_buffers; i++) {
         ggml_backend_buffer_free((*buffers)[i]);
@@ -943,11 +1032,12 @@ static void free_buffers(ggml_backend_buffer_t ** buffers, const size_t * n_buff
     free(*buffers);
 }
 
-static bool alloc_tensor_range(struct ggml_context * ctx,
+static bool my_alloc_tensor_range(struct ggml_context * ctx,
         struct ggml_tensor * first, struct ggml_tensor * last,
         ggml_backend_buffer_type_t buft, size_t size,
         ggml_backend_buffer_t ** buffers, size_t * n_buffers) {
 
+    //lxm:根据buft和大小分配一块buffer
     ggml_backend_buffer_t buffer = ggml_backend_buft_alloc_buffer(buft, size);
     if (buffer == NULL) {
         GGML_LOG_ERROR("%s: failed to allocate %s buffer of size %zu\n", __func__, ggml_backend_buft_name(buft), size);
@@ -958,10 +1048,64 @@ static bool alloc_tensor_range(struct ggml_context * ctx,
     *buffers = realloc(*buffers, sizeof(ggml_backend_buffer_t) * (*n_buffers + 1));
     (*buffers)[(*n_buffers)++] = buffer;
 
-    struct ggml_tallocr tallocr = ggml_tallocr_new(buffer);
-
+    //lxm:获得一个分配器
+    struct ggml_tallocr tallocr = my_ggml_tallocr_new(buffer);
+    int count = 0;
+    //lxm:根据ctx上下文遍历当前backend上的tensor
     for (struct ggml_tensor * t = first; t != last; t = ggml_get_next_tensor(ctx, t)) {
         enum ggml_status status = GGML_STATUS_SUCCESS;
+        int layer_id,m;
+        if (t->data == NULL) {
+            if (t->view_src == NULL) {
+                status = my_ggml_tallocr_alloc(&tallocr, t);
+            } else if (t->buffer == NULL) {
+                status = ggml_backend_view_init(t);
+            }
+        } else {
+            if (t->view_src != NULL && t->buffer == NULL) {
+                // view of a pre-allocated tensor
+                status = ggml_backend_view_init(t);
+            }
+        }
+        if (status != GGML_STATUS_SUCCESS) {
+            GGML_LOG_ERROR("%s: failed to initialize tensor %s\n", __func__, t->name);
+            free_buffers(buffers, n_buffers);
+            return false;
+        }
+    }
+
+    return true;
+}
+
+
+static bool alloc_tensor_range(struct ggml_context * ctx,
+        struct ggml_tensor * first, struct ggml_tensor * last,
+        ggml_backend_buffer_type_t buft, size_t size,
+        ggml_backend_buffer_t ** buffers, size_t * n_buffers) {
+
+    //lxm:根据buft和大小分配一块buffer
+    ggml_backend_buffer_t buffer = ggml_backend_buft_alloc_buffer(buft, size);
+    if (buffer == NULL) {
+        GGML_LOG_ERROR("%s: failed to allocate %s buffer of size %zu\n", __func__, ggml_backend_buft_name(buft), size);
+        free_buffers(buffers, n_buffers);
+        return false;
+    }
+
+    *buffers = realloc(*buffers, sizeof(ggml_backend_buffer_t) * (*n_buffers + 1));
+    (*buffers)[(*n_buffers)++] = buffer;
+
+    //lxm:获得一个分配器
+    struct ggml_tallocr tallocr = ggml_tallocr_new(buffer);//起始地址为offset+offset
+    //lxm:根据ctx上下文遍历当前backend上的tensor
+    for (struct ggml_tensor * t = first; t != last; t = ggml_get_next_tensor(ctx, t)) {
+        enum ggml_status status = GGML_STATUS_SUCCESS;
+        int layer_id,m;
+        // if (parse_blk_ffn_exps(ggml_get_name(t), &layer_id, &m)) 
+        // {
+        //     printf("%s: skipping expert layer %d in tensor '%s'\n", __func__, layer_id, ggml_get_name(t));
+        //     ggml_tallocr_alloc(&tallocr, t);
+        //     continue;
+        // }
         if (t->data == NULL) {
             if (t->view_src == NULL) {
                 status = ggml_tallocr_alloc(&tallocr, t);
@@ -984,6 +1128,98 @@ static bool alloc_tensor_range(struct ggml_context * ctx,
     return true;
 }
 
+
+//lxm: realloc buffers for tensors
+ggml_backend_buffer_t my_ggml_backend_alloc_ctx_tensors_from_buft(struct ggml_context * ctx,struct ggml_tensor * t,int reduction,int origin_size) {
+    GGML_ASSERT(ggml_get_no_alloc(ctx) == true);
+    ggml_backend_buffer_type_t buft = t->buffer->buft;
+    size_t alignment = LXM_ALIGNMENT;//LXM_ALIGNMENT
+    size_t max_size = ggml_backend_buft_get_max_size(buft);
+
+    ggml_backend_buffer_t * buffers = NULL;
+    size_t n_buffers = 0;
+
+    size_t cur_buf_size = 0;
+    struct ggml_tensor * first = ggml_get_first_tensor(ctx);
+
+    //lxm:计算大小
+    for (struct ggml_tensor * t = first; t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+        int layer_id,m;
+        //重新初始化指针
+        t->data=NULL;
+        t->buffer=NULL;
+
+        size_t this_size = 0;
+        if(parse_blk_ffn_exps(ggml_get_name(t),&layer_id,&m))//每一层的大小缩减到reduction
+        {
+            //重新设定tensor大小，ne[2]:64->6 nb[2]:ne[1]*nb[1]
+            t->ne[2] = reduction;
+            for (int i = 2; i < GGML_MAX_DIMS; i++) {
+                t->nb[i] = t->nb[i - 1] * t->ne[i - 1];
+            }
+            // this_size = this_size/ reduction;
+
+            this_size = GGML_PAD(ggml_backend_buft_get_alloc_size(buft, t)/t->ne[2], LXM_ALIGNMENT)*t->ne[2];//align为每个专家都pad内存，方便后面的读取
+
+        }else{
+            if (t->data == NULL && t->view_src == NULL) {
+                this_size = GGML_PAD(ggml_backend_buft_get_alloc_size(buft, t), LXM_ALIGNMENT);//都是一个align，因为offset是累加起来的
+            }
+        }
+
+        
+
+        if (cur_buf_size > 0 && (cur_buf_size + this_size) > max_size) {
+            // allocate tensors in the current buffer
+            if (!my_alloc_tensor_range(ctx, first, t, buft, cur_buf_size, &buffers, &n_buffers)) {
+                return NULL;
+            }
+            first = t;
+            cur_buf_size = this_size;
+        } else {
+            cur_buf_size += this_size;
+        }
+    }
+    // allocate remaining tensors
+    //lxm:为tensor分配缓存区
+    if (cur_buf_size >= 0) {
+        if (!my_alloc_tensor_range(ctx, first, NULL, buft, cur_buf_size, &buffers, &n_buffers)) {
+            return NULL;
+        }
+    }
+
+    //lxm:复原原来的大小
+    for (struct ggml_tensor * t = first; t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+        int layer_id,m;
+        if(parse_blk_ffn_exps(ggml_get_name(t),&layer_id,&m))//每一层的维度复原
+        {
+            //重新设定tensor大小，ne[2]:64->6 nb[2]:ne[1]*nb[1]
+            t->ne[2] = origin_size;
+            for (int i = 2; i < GGML_MAX_DIMS; i++) {
+                t->nb[i] = t->nb[i - 1] * t->ne[i - 1];
+            }
+            // this_size = this_size/ reduction;
+        }
+    }
+
+
+    if (n_buffers == 0) {
+#ifndef NDEBUG
+        GGML_LOG_DEBUG("%s: all tensors in the context are already allocated\n", __func__);
+#endif
+        return NULL;
+    }
+    ggml_backend_buffer_t buffer;
+    if (n_buffers == 1) {
+        buffer = buffers[0];
+    } else {
+        buffer = ggml_backend_multi_buffer_alloc_buffer(buffers, n_buffers);
+    }
+    free(buffers);
+    return buffer;
+}
+
+
 ggml_backend_buffer_t ggml_backend_alloc_ctx_tensors_from_buft(struct ggml_context * ctx, ggml_backend_buffer_type_t buft) {
     GGML_ASSERT(ggml_get_no_alloc(ctx) == true);
 
@@ -995,7 +1231,14 @@ ggml_backend_buffer_t ggml_backend_alloc_ctx_tensors_from_buft(struct ggml_conte
 
     size_t cur_buf_size = 0;
     struct ggml_tensor * first = ggml_get_first_tensor(ctx);
+    //lxm:计算大小
     for (struct ggml_tensor * t = first; t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+        int layer_id,m;
+        // if (parse_blk_ffn_exps(ggml_get_name(t), &layer_id, &m)) 
+        // {
+        //     printf("%s: skipping expert layer %d in tensor '%s'\n", __func__, layer_id, ggml_get_name(t));
+        //     continue;
+        // }
         size_t this_size = 0;
         if (t->data == NULL && t->view_src == NULL) {
             this_size = GGML_PAD(ggml_backend_buft_get_alloc_size(buft, t), alignment);
@@ -1014,7 +1257,8 @@ ggml_backend_buffer_t ggml_backend_alloc_ctx_tensors_from_buft(struct ggml_conte
     }
 
     // allocate remaining tensors
-    if (cur_buf_size > 0) {
+    //lxm:为tensor分配缓存区
+    if (cur_buf_size >= 0) {
         if (!alloc_tensor_range(ctx, first, NULL, buft, cur_buf_size, &buffers, &n_buffers)) {
             return NULL;
         }

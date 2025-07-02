@@ -41,7 +41,7 @@ ggml_backend_buffer_t ggml_backend_buft_alloc_buffer(ggml_backend_buffer_type_t 
         return ggml_backend_buffer_init(buft, {}, NULL, 0);
     }
 
-    return buft->iface.alloc_buffer(buft, size);
+    return buft->iface.alloc_buffer(buft, size);//调用ggml_aligned_malloc,分配一块对齐的地址
 }
 
 size_t ggml_backend_buft_get_alignment(ggml_backend_buffer_type_t buft) {
@@ -120,7 +120,7 @@ void * ggml_backend_buffer_get_base(ggml_backend_buffer_t buffer) {
         return NULL;
     }
 
-    void * base = buffer->iface.get_base(buffer);
+    void * base = buffer->iface.get_base(buffer);//buffer context
 
     GGML_ASSERT(base != NULL && "backend buffer base cannot be NULL");
 
@@ -756,6 +756,13 @@ static int ggml_backend_sched_backend_id_from_cur(ggml_backend_sched_t sched, st
         SET_CAUSE(tensor, "1.inp");
         return cur_backend_id;
     }
+
+    //lxm
+    if  (tensor->op == MYML_OP_EXPERT_UPLOAD || 
+        tensor->op == MYML_OP_EXPERT_OFFLOAD ) {
+        return 0;
+    }
+
 
     // operations with weights are preferably run on the same backend as the weights
     for (int i = 0; i < GGML_MAX_SRC; i++) {
@@ -1940,7 +1947,7 @@ static const char * ggml_backend_cpu_buffer_type_get_name(ggml_backend_buffer_ty
 }
 
 static ggml_backend_buffer_t ggml_backend_cpu_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
-    void * data = ggml_aligned_malloc(size);
+    void * data = ggml_aligned_malloc(size);//分配一段大小为align对齐后的buffer地址
 
     if (data == NULL) {
         GGML_LOG_ERROR("%s: failed to allocate buffer of size %zu\n", __func__, size);

@@ -148,16 +148,19 @@ endif()
 # 3rd-party
 #
 
-if (LLAMA_USE_SYSTEM_GGML)
-    message(STATUS "Using system-provided libggml, skipping ggml build")
+if (NOT LLAMA_USE_SYSTEM_GGML)
+    # 让 ggml 编译时也能看到 src/ 下的 llama.h 和 expertload.hh
+    include_directories($
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    {CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    add_subdirectory(ggml)
+else()
     find_package(ggml REQUIRED)
     add_library(ggml ALIAS ggml::ggml)
 endif()
 
-if (NOT TARGET ggml AND NOT LLAMA_USE_SYSTEM_GGML)
-    add_subdirectory(ggml)
-    # ... otherwise assume ggml is added by a parent CMakeLists.txt
-endif()
+target_link_libraries(ggml-cpu PUBLIC uring)
 
 #
 # build the library

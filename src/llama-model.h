@@ -350,6 +350,9 @@ struct llama_model {
     struct ggml_tensor * conv1d   = nullptr;
     struct ggml_tensor * conv1d_b = nullptr;
 
+    //lxm: save ml
+    struct llama_model_loader * ml = nullptr; // model loader, used for loading tensors
+
     std::vector<llama_layer> layers;
 
     llama_model_params params;
@@ -416,6 +419,9 @@ struct llama_model {
 private:
     struct impl;
     std::unique_ptr<impl> pimpl;
+public:
+    std::vector<ggml_context_ptr>& get_pimpl_ctx()const;
+    bool reset_pimpl_bufs(ggml_backend_buffer_t buf)const;
 };
 
 const char * llm_type_name(llm_type type);

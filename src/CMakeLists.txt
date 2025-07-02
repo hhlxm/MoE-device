@@ -31,12 +31,14 @@ add_library(llama
             unicode-data.cpp
             unicode.cpp
             unicode.h
+            llama-impl.h
             )
 
 target_include_directories(llama PRIVATE .)
 target_include_directories(llama PUBLIC ../include)
 target_compile_features   (llama PRIVATE cxx_std_17) # don't bump
 
+target_link_libraries(llama PRIVATE uring)
 target_link_libraries(llama PUBLIC ggml)
 
 if (BUILD_SHARED_LIBS)

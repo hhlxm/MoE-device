@@ -13,6 +13,7 @@ using llama_mmaps  = std::vector<std::unique_ptr<llama_mmap>>;
 using llama_mlocks = std::vector<std::unique_ptr<llama_mlock>>;
 
 struct llama_file {
+    const char * fname;
     llama_file(const char * fname, const char * mode);
     ~llama_file();
 
@@ -28,6 +29,8 @@ struct llama_file {
 
     void write_raw(const void * ptr, size_t len) const;
     void write_u32(uint32_t val) const;
+
+    const char * get_fname() const { return fname; }
 
 private:
     struct impl;

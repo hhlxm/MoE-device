@@ -6,7 +6,6 @@
 #include "llama-cparams.h"
 #include "llama-model-loader.h"
 #include "llama-kv-cache.h"
-
 #include "ggml-cpp.h"
 
 #include <algorithm>
@@ -20,6 +19,8 @@
 #include <regex>
 #include <sstream>
 #include <stdexcept>
+#include "expertload.hh"
+#include "../ggml/src/ggml-backend-impl.h"
 
 const char * llm_type_name(llm_type type) {
     switch (type) {
@@ -415,6 +416,21 @@ void llama_model::load_arch(llama_model_loader & ml) {
     if (arch == LLM_ARCH_UNKNOWN) {
         throw std::runtime_error("unknown model architecture: '" + ml.get_arch_name() + "'");
     }
+}
+
+//lxm:reset pimpl->bufs
+bool llama_model::reset_pimpl_bufs(ggml_backend_buffer_t buf)const
+{
+    int cnt =0;
+    for(auto & b : pimpl->bufs) {
+        if (b.get()->buft == buf->buft) {
+                pimpl->bufs[cnt].reset(buf);
+                return true;
+        }
+        cnt++;
+    }
+    GGML_ABORT("failed to reset pimpl bufs for buffer %s", buf->buft);
+    return false;//wtf????
 }
 
 void llama_model::load_hparams(llama_model_loader & ml) {
@@ -1516,6 +1532,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
 
     // assign the input layer
     // there is very little benefit to offloading the input layer, so always keep it on the CPU
+    //lxm:输入在cpu上
     pimpl->dev_input = { cpu_dev, &pimpl->cpu_buft_list };
 
     // assign the repeating layers to the devices according to the splits
@@ -1718,6 +1735,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
         layers.resize(n_layer);
 
         // TODO: move to a separate function
+        //lxm: 创建tensor
         const auto tn = LLM_TN(arch);
         switch (arch) {
             case LLM_ARCH_LLAMA:
@@ -4131,8 +4149,10 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
     const size_t n_max_backend_buffer = ctx_map.size() * ml.files.size();
     pimpl->bufs.reserve(n_max_backend_buffer);
 
+    //lxm:创建后台缓存区，遍历不同的后端
     for (auto & it : ctx_map) {
         ggml_backend_buffer_type_t buft = it.first;
+        printf("%s: creating %s buffers \n", __func__, ggml_backend_buft_name(buft));
         ggml_context * ctx              = it.second;
 
         // skip contexts without tensors
@@ -4157,7 +4177,8 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
         bool buffer_from_host_ptr_supported = props.caps.buffer_from_host_ptr;
         bool is_default_buft = buft == ggml_backend_dev_buffer_type(dev);
 
-        if (ml.use_mmap && use_mmap_buffer && buffer_from_host_ptr_supported && is_default_buft) {
+        if (ml.use_mmap && use_mmap_buffer && buffer_from_host_ptr_supported && is_default_buft) 
+        {
             for (uint32_t idx = 0; idx < ml.files.size(); idx++) {
                 // only the mmap region containing the tensors in the model is mapped to the backend buffer
                 // this is important for metal with apple silicon: if the entire model could be mapped to a metal buffer, then we could just use metal for all layers
@@ -4171,15 +4192,17 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                 const size_t max_size = ggml_get_max_tensor_size(ctx);
                 ggml_backend_buffer_t buf = ggml_backend_dev_buffer_from_host_ptr(dev, (char *) addr + first, last - first, max_size);
                 if (buf == nullptr) {
-                    throw std::runtime_error(format("unable to allocate %s buffer", ggml_backend_buft_name(buft)));
+                    throw std::runtime_error(format("mmap unable to allocate %s buffer", ggml_backend_buft_name(buft)));
                 }
                 pimpl->bufs.emplace_back(buf);
                 buf_map.emplace(idx, buf);
             }
         }
         else {
+            //lxm:创建缓存区
             ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx, buft);
             if (buf == nullptr) {
+                continue;
                 throw std::runtime_error(format("unable to allocate %s buffer", ggml_backend_buft_name(buft)));
             }
             pimpl->bufs.emplace_back(buf);
@@ -4234,6 +4257,8 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
     }
 
     // load tensor data
+    //从文件加载tensor到缓存区中
+    //10GB
     for (auto & it : ctx_bufs) {
         ggml_context * ctx = it.first;
         auto & bufs = it.second;
@@ -4637,7 +4662,8 @@ struct llm_build_llama : public llm_graph_context {
                         LLM_FFN_SILU, true,
                         false, 0.0,
                         LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX,
-                        il);
+                        il,
+                        gf);
                 cb(cur, "ffn_moe_out", il);
             }
 
@@ -5482,7 +5508,8 @@ struct llm_build_grok : public llm_graph_context {
                     LLM_FFN_GELU, true,
                     false, 0.0,
                     LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX,
-                    il);
+                    il,
+                    gf);
             cb(cur, "ffn_moe_out", il);
 
             // Grok
@@ -5624,7 +5651,8 @@ struct llm_build_dbrx : public llm_graph_context {
                     LLM_FFN_SILU, true,
                     false, 0.0,
                     LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX,
-                    il);
+                    il,
+                    gf);
             cb(cur, "ffn_moe_out", il);
 
             cur = ggml_add(ctx0, cur, ffn_inp);
@@ -6004,7 +6032,8 @@ struct llm_build_bert : public llm_graph_context {
                         LLM_FFN_GELU,
                         false, false,
                         0.0f,
-                        LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX, il);
+                        LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX, il,
+                            gf);
                 cb(cur, "ffn_moe_out", il);
             } else if (model.arch == LLM_ARCH_BERT || model.arch == LLM_ARCH_NOMIC_BERT_MOE) {
                 cur = build_ffn(cur,
@@ -7468,7 +7497,8 @@ struct llm_build_phi3 : public llm_graph_context {
                         LLM_FFN_SILU, true,
                         false, 0.0,
                         LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX,
-                        il);
+                        il,
+                            gf);
                 cb(cur, "ffn_moe_out", il);
             }
 
@@ -9654,7 +9684,8 @@ struct llm_build_olmoe : public llm_graph_context {
                     LLM_FFN_SILU, false,
                     false, 0.0,
                     LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX,
-                    il);
+                    il,
+                            gf);
             cb(cur, "ffn_moe_out", il);
 
             cur = ggml_add(ctx0, cur, ffn_inp);
@@ -10068,7 +10099,8 @@ struct llm_build_arctic : public llm_graph_context {
                     LLM_FFN_SILU, true,
                     false, 0.0,
                     LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX,
-                    il);
+                    il,
+                            gf);
             cb(cur, "ffn_moe_out", il);
 
             cur = ggml_add(ctx0, cur, ffn_out);
@@ -10480,7 +10512,8 @@ struct llm_build_deepseek2 : public llm_graph_context {
                             LLM_FFN_SILU, hparams.expert_weights_norm,
                             true, hparams.expert_weights_scale,
                             (llama_expert_gating_func_type) hparams.expert_gating_func,
-                            il);
+                            il,
+                            gf);
                 cb(moe_out, "ffn_moe_out", il);
 
                 // FFN shared expert
@@ -13532,6 +13565,13 @@ llm_graph_result_ptr llama_model::build_graph(
     return std::move(llm->res);
 }
 
+std::vector<ggml_context_ptr>& llama_model::get_pimpl_ctx()const
+{
+    return pimpl->ctxs;
+}
+
+
+
 //
 // interface implementation
 //
@@ -13807,4 +13847,14 @@ bool llama_model_is_recurrent(const llama_model * model) {
 
 const std::vector<std::pair<std::string, ggml_tensor *>> & llama_internal_get_tensor_map(const llama_model * model) {
     return model->tensors_by_name;
+}
+
+uint64_t* get_io_status()
+{
+    auto [cnt,size,time] = expert_loader::get_instance().get_io_stats();
+    uint64_t * temp = (uint64_t* )malloc(sizeof(uint64_t) * 3);
+    temp[0] = cnt;
+    temp[1] = size;
+    temp[2] = time;
+    return temp;
 }

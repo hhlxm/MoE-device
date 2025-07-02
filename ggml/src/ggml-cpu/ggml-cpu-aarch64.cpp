@@ -6032,7 +6032,7 @@ class tensor_traits_base : public ggml::cpu::tensor_traits {
   public:
     virtual int repack(struct ggml_tensor * t, const void * data, size_t data_size) = 0;
 };
-
+static int is_decode = 0;
 template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PARAM_TYPE> class tensor_traits : public tensor_traits_base {
 
     bool work_size(int /* n_threads */, const struct ggml_tensor * op, size_t & size) override {
@@ -6218,10 +6218,11 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
                 }
             }
         }
-
+ 
         ggml_barrier(params->threadpool);
 
         // compute each matrix multiplication in sequence
+        int idx = 0;
         for (int cur_a = 0; cur_a < n_as; ++cur_a) {
             const int64_t cne1 = matrix_row_counts[cur_a];
 
@@ -6230,6 +6231,11 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
             }
 
             const auto * src0_cur = (const char *) src0->data + cur_a*nb02;
+            if(ids->ne[1] ==1&&is_decode==4)
+            {
+                src0_cur = (const char *) src0->data + (idx++) * GGML_PAD(nb02,LXM_ALIGNMENT);//lxm：挑出专家的权重：基址+第几个需要的专家*pad偏移大小
+            }
+
 
             //const int64_t nr0 = ne01; // src0 rows
             const int64_t nr1 = cne1; // src1 rows
@@ -6262,6 +6268,10 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
                         src0_cur + src0_cur_start * nb01,
                         src1_col, 1, src0_cur_end - src0_cur_start);
             }
+        }
+        if(ids->ne[1] ==1&&is_decode<4)//最后一层
+        {
+            is_decode++;
         }
 #undef MMID_MATRIX_ROW
     }
@@ -6404,8 +6414,11 @@ class extra_buffer_type : ggml::cpu::extra_buffer_type {
 
     ggml::cpu::tensor_traits * get_tensor_traits(const struct ggml_tensor * op) override {
         if (op->op == GGML_OP_MUL_MAT || op->op == GGML_OP_MUL_MAT_ID) {
-            if (op->src[0]->buffer && op->src[0]->buffer->buft == ggml_backend_cpu_aarch64_buffer_type()) {
-                return (ggml::cpu::tensor_traits *) op->src[0]->extra;
+            if(op->src[0]->buffer)
+            {
+                if (op->src[0]->buffer->buft == ggml_backend_cpu_aarch64_buffer_type()) {
+                    return (ggml::cpu::tensor_traits *) op->src[0]->extra;
+                }
             }
         }
         return nullptr;

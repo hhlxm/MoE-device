@@ -28,6 +28,8 @@ struct llama_context {
 
     void synchronize();
 
+
+    
     const llama_model   & get_model()   const;
     const llama_cparams & get_cparams() const;
 
@@ -90,7 +92,8 @@ struct llama_context {
 
     int encode(llama_batch & inp_batch);
     int decode(llama_batch & inp_batch);
-
+        //lxm:decode
+        int j_decode = 0;
     //
     // state save/load
     //

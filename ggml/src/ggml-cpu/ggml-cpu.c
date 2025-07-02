@@ -1462,7 +1462,7 @@ static void ggml_compute_forward_mul_mat_id_one_chunk(
     const struct ggml_tensor * src0,
     const struct ggml_tensor * src1,
     const struct ggml_tensor * ids,
-    const int64_t cur_a,
+    const int64_t cur_a,//专家id
     const int64_t ir0_start,
     const int64_t ir0_end,
     const int64_t ir1_start,
@@ -1491,7 +1491,7 @@ static void ggml_compute_forward_mul_mat_id_one_chunk(
                 const int64_t _i12 = ir1; // logical row index for this expert
 
                 struct mmid_row_mapping row_mapping = MMID_MATRIX_ROW(cur_a, _i12);
-                const int id       = row_mapping.i1; // selected expert index
+                const int id       = row_mapping.i1; // selected expert index 专家在ids中的序号
 
                 const int64_t  i11 = id % ne11;
                 const int64_t  i12 = row_mapping.i2; // row index in src1
@@ -1508,7 +1508,7 @@ static void ggml_compute_forward_mul_mat_id_one_chunk(
                     ? (i11      + i12*ne11)*row_size
                     : (i11*nb11 + i12*nb12));
 
-                float * dst_col = (float *) ((char *) dst->data + (i1*nb1 + i2*nb2));
+                float * dst_col = (float *) ((char *) dst->data + (i1*nb1 + i2*nb2));//计算输出的位置
 
                 for (int64_t ir0 = iir0; ir0 < iir0 + blck_0 && ir0 < ir0_end; ++ir0) {
                     vec_dot(ne00, &tmp[ir0 - iir0], 0, src0_cur + ir0*nb01, 0, src1_col, 0, 1);
@@ -1527,19 +1527,19 @@ static void * incr_ptr_aligned(void ** p, size_t size, size_t align) {
     *p = (void *) ((char *) ptr + size);
     return ptr;
 }
-
+static int is_decode = 0;
 static void ggml_compute_forward_mul_mat_id(
         const struct ggml_compute_params * params,
               struct ggml_tensor * dst) {
 
-    const struct ggml_tensor * src0 = dst->src[0];
-    const struct ggml_tensor * src1 = dst->src[1];
-    const struct ggml_tensor * ids = dst->src[2];
+    const struct ggml_tensor * src0 = dst->src[0];//[inter,hidden,total_experts_64,1],expert_weights
+    const struct ggml_tensor * src1 = dst->src[1];//[inter,expert_used,tokens,1],hidden_state
+    const struct ggml_tensor * ids = dst->src[2];//[expert_used,tokens,1,1],selected_expert_ids
 
     GGML_TENSOR_BINARY_OP_LOCALS
 
-    const int ith = params->ith;
-    const int nth = params->nth;
+    const int ith = params->ith;// thread idx
+    const int nth = params->nth;// total threads
 
     const enum ggml_type type = src0->type;
 
@@ -1621,13 +1621,13 @@ static void ggml_compute_forward_mul_mat_id(
         memset(matrix_row_counts, 0, n_as*sizeof(int64_t));
 
         // group rows by src0 matrix
-        for (int64_t iid1 = 0; iid1 < ids->ne[1]; ++iid1) {
-            for (int id = 0; id < n_ids; ++id) {
-                const int32_t i02 = *(const int32_t *) ((const char *) ids->data + iid1*ids->nb[1] + id*ids->nb[0]);
+        for (int64_t iid1 = 0; iid1 < ids->ne[1]; ++iid1) { //第几个token
+            for (int id = 0; id < n_ids; ++id) {            //第几个选择的expert
+                const int32_t i02 = *(const int32_t *) ((const char *) ids->data + iid1*ids->nb[1] + id*ids->nb[0]);//获得序号：基址+token+第几个expert
 
-                assert(i02 >= 0 && i02 < n_as);
+                assert(i02 >= 0 && i02 < n_as);//确保序号在范围内
 
-                MMID_MATRIX_ROW(i02, matrix_row_counts[i02]) = (struct mmid_row_mapping) {id, iid1};
+                MMID_MATRIX_ROW(i02, matrix_row_counts[i02]) = (struct mmid_row_mapping) {id, iid1};//记录专家-token对
                 matrix_row_counts[i02] += 1;
             }
         }
@@ -1641,18 +1641,24 @@ static void ggml_compute_forward_mul_mat_id(
 
     ggml_barrier(params->threadpool);
 
-    for (int cur_a = 0; cur_a < n_as; ++cur_a) {
-        const int64_t cne1 = matrix_row_counts[cur_a];
+    //TODO: 
+    int idx = 0;
+    for (int cur_a = 0; cur_a < n_as; ++cur_a) {//遍历所有专家
+        const int64_t cne1 = matrix_row_counts[cur_a];//统计cur_a专家被选中的次数
 
         if (cne1 == 0) {
             continue;
         }
-
-        const char * src0_cur = (const char *) src0->data + cur_a * nb02;
+        //得到专家权重
+        const char * src0_cur = (const char *) src0->data + cur_a * nb02;//lxm：挑出专家的权重：基址+专家号*偏移大小
+        if(ids->ne[1] ==1&&is_decode==2)
+        {
+            src0_cur = (const char *) src0->data + (idx++) * GGML_PAD(nb02,LXM_ALIGNMENT);//lxm：挑出专家的权重：基址+第几个专家*偏移大小
+        }
         const void * wdata = (src1->type == vec_dot_type) ? src1->data : params->wdata;
-        const size_t row_size = ggml_row_size(vec_dot_type, ne10);
+        const size_t row_size = ggml_row_size(vec_dot_type, ne10);//src0->nb[1]
 
-        const int64_t nr0 = ne01;
+        const int64_t nr0 = ne01;//src0->ne[1]
         const int64_t nr1 = cne1;
 
         int chunk_size = 16;
@@ -1705,6 +1711,10 @@ static void ggml_compute_forward_mul_mat_id(
 
             current_chunk = atomic_fetch_add_explicit(current_chunk_ctr, 1, memory_order_relaxed);
         }
+    }
+    if(ids->ne[1] ==1&&is_decode<2)//最后一层
+    {
+        is_decode++;
     }
 }
 
@@ -2061,6 +2071,15 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             {
                 // nop
             } break;
+        //lxm: support expert load op
+        case MYML_OP_EXPERT_UPLOAD:
+            {
+                myml_compute_forward_expert_upload(params, tensor);
+            }break;  
+        case MYML_OP_EXPERT_OFFLOAD:
+            {
+                myml_compute_forward_expert_offload(params, tensor);
+            }break;
         case GGML_OP_COUNT:
             {
                 GGML_ABORT("fatal error");
@@ -2348,6 +2367,11 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
             {
                 n_tasks = 1;
             } break;
+        case MYML_OP_EXPERT_UPLOAD:
+        case MYML_OP_EXPERT_OFFLOAD:
+            {
+                n_tasks = 1; // Single-threaded I/O
+            }break;
         case GGML_OP_COUNT:
             {
                 GGML_ABORT("fatal error");
@@ -2824,6 +2848,25 @@ struct ggml_cplan ggml_graph_plan(
     return cplan;
 }
 
+//lxm:全局静态变量用于跨调用累加时间（单位：微秒）
+static atomic_uint_fast64_t s_accumulated_time = 0;
+static atomic_uint_fast64_t s_accumulated_count = 0;
+// static atomic_uint_fast64_t load_time = 0;
+// static atomic_uint_fast64_t load_count = 0;
+uint64_t my_get_accumulated_time(void) {
+    return atomic_load_explicit(&s_accumulated_time, memory_order_relaxed);
+}
+uint64_t my_get_accumulated_count(void) {
+    return atomic_load_explicit(&s_accumulated_count, memory_order_relaxed);
+}
+// uint64_t my_get_load_time(void) {
+//     return atomic_load_explicit(&load_time, memory_order_relaxed);
+// }
+// uint64_t my_get_load_count(void) {
+//     return atomic_load_explicit(&load_count, memory_order_relaxed);
+// }
+
+
 static thread_ret_t ggml_graph_compute_thread(void * data) {
     struct ggml_compute_state * state = (struct ggml_compute_state *) data;
     struct ggml_threadpool    * tp    = state->threadpool;
@@ -2841,8 +2884,16 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
         /*.threadpool=*/ tp,
     };
 
+    uint64_t t_start,t_end;
+
     for (int node_n = 0; node_n < cgraph->n_nodes && atomic_load_explicit(&tp->abort, memory_order_relaxed) != node_n; node_n++) {
         struct ggml_tensor * node = cgraph->nodes[node_n];
+        char * name = ggml_get_name(node);
+        char * sub = NULL;
+        // if(state->ith == 0)
+        // {
+        //     printf("thread %d: processing node %d/%d (%s)\n", state->ith, node_n, cgraph->n_nodes, ggml_get_name(node));
+        // }
 
         ggml_compute_forward(&params, node);
 
@@ -2852,11 +2903,36 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
             tp->ec    = GGML_STATUS_ABORTED;
         }
 
+        if(state->ith == 0&&strcmp(ggml_get_name(node),"ffn_inp-0")==0 ) {
+            //start
+            atomic_fetch_add(&s_accumulated_count, 1);
+            if(my_get_accumulated_count()<2) {
+              ;  
+            } 
+            else
+            {
+                t_start = ggml_time_us();UNUSED(t_start);
+            }
+        }
+        else if( state->ith == 0&&strcmp(ggml_get_name(node),"l_out-15")==0 ) {
+            //end
+            if(my_get_accumulated_count()<2) {
+              ;  
+            } 
+            else
+            {
+                t_end = ggml_time_us();UNUSED(t_end);
+                atomic_fetch_add(&s_accumulated_time, (t_end - t_start));
+            }
+
+        }
+
         if (node_n + 1 < cgraph->n_nodes) {
             ggml_barrier(state->threadpool);
         }
-    }
+        
 
+    }
     ggml_barrier(state->threadpool);
 
     return 0;

@@ -397,6 +397,12 @@ static bool ggml_backend_cpu_device_supports_op(ggml_backend_dev_t dev, const st
         return true;
     }
 
+    // lxm: swap op
+    if  (op->op == MYML_OP_EXPERT_UPLOAD || op->op == MYML_OP_EXPERT_OFFLOAD) {
+        return true;
+    }
+
+
     // extra_buffer_op?
     for (auto extra : ggml_backend_cpu_get_extra_buffers_type()) {
         if (extra) {

@@ -273,9 +273,9 @@ void ggml_log_callback_default(enum ggml_log_level level, const char * text, voi
 
 void * ggml_aligned_malloc(size_t size) {
 #if defined(__s390x__)
-    const int alignment = 256;
+    const int alignment = LXM_ALIGNMENT;
 #else
-    const int alignment = 64;
+    const int alignment = LXM_ALIGNMENT;//LXM_ALIGNMENT
 #endif
 
 #if defined(_MSC_VER) || defined(__MINGW32__)
@@ -6547,4 +6547,65 @@ bool ggml_threadpool_params_match(const struct ggml_threadpool_params * p0, cons
     if (p0->poll           != p1->poll       )    return false;
     if (p0->strict_cpu     != p1->strict_cpu )    return false;
     return memcmp(p0->cpumask, p1->cpumask, GGML_MAX_N_THREADS) == 0;
+}
+
+
+struct ggml_tensor * mygf_expert_upload(
+    struct ggml_context * ctx,
+    struct ggml_tensor * gate_exps,
+    struct ggml_tensor * up_exps,
+    struct ggml_tensor * down_exps,
+    struct ggml_tensor * selected_experts,//TODO
+    int il,
+    int m) {
+    struct ggml_tensor * result;
+    switch (m) {
+        case 0: result = ggml_view_tensor(ctx, gate_exps); break;
+        case 1: result = ggml_view_tensor(ctx, up_exps); break;
+        case 2: result = ggml_view_tensor(ctx, down_exps); break;
+        default: GGML_ASSERT(false);
+    }
+    ggml_format_name(result, "expert_upload-%d", il);
+
+    result->op = MYML_OP_EXPERT_UPLOAD;
+    result->op_params[0] = il;
+    result->op_params[1] = m;
+    result->src[0] = gate_exps;
+    result->src[1] = up_exps;
+    result->src[2] = down_exps;
+    result->src[3] = selected_experts; // Assuming selected_experts is a tensor containing expert IDs
+
+    return result;
+}
+
+struct ggml_tensor * mygf_expert_offload(
+    struct ggml_context * ctx,
+    struct ggml_tensor * gate_exps,
+    struct ggml_tensor * up_exps,
+    struct ggml_tensor * down_exps,
+    int expert_ids,
+    int il,
+    int m) {
+    struct ggml_tensor * result;
+    switch (m) {
+        case 0: result = ggml_view_tensor(ctx, gate_exps); break;
+        case 1: result = ggml_view_tensor(ctx, up_exps); break;
+        case 2: result = ggml_view_tensor(ctx, down_exps); break;
+        default: GGML_ASSERT(false);
+    }
+    ggml_format_name(result, "expert_offload_%d_%d", il, m);
+
+    result->op = MYML_OP_EXPERT_OFFLOAD;
+    result->op_params[0] = il;
+    result->op_params[1] = m;
+    result->op_params[2] = expert_ids; // Assuming expert_ids is an int, not a vector
+    // result->op_params[2] = expert_ids.size();
+    // for (size_t i = 0; i < expert_ids.size() && i < 8; i++) {
+    //     result->op_params[3 + i] = expert_ids[i];
+    // }
+    result->src[0] = gate_exps;
+    result->src[1] = up_exps;
+    result->src[2] = down_exps;
+
+    return result;
 }

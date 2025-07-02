@@ -433,6 +433,10 @@ struct common_params {
     // return false from callback to abort model loading or true to continue
     llama_progress_callback load_progress_callback = NULL;
     void *                  load_progress_callback_user_data = NULL;
+
+    //lxm: params for expert offloading
+    bool expert_offload=true; // Enable expert offload to disk
+    int32_t max_expert_memory=6; // Max number of experts in memory
 };
 
 // call once at the start of a program if it uses libcommon

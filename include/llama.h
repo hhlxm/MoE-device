@@ -1369,6 +1369,9 @@ extern "C" {
             ggml_opt_epoch_callback   callback_train,
             ggml_opt_epoch_callback   callback_eval);
 
+    LLAMA_API uint64_t* get_io_status();
+
+
 #ifdef __cplusplus
 }
 #endif

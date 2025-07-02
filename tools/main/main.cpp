@@ -5,7 +5,7 @@
 #include "sampling.h"
 #include "llama.h"
 #include "chat.h"
-
+#include "../../src/llama-model.h"
 #include <cstdio>
 #include <cstring>
 #include <ctime>
@@ -961,9 +961,38 @@ int main(int argc, char ** argv) {
     if (!path_session.empty() && params.prompt_cache_all && !params.prompt_cache_ro) {
         LOG("\n%s: saving final output to session file '%s'\n", __func__, path_session.c_str());
         llama_state_save_file(ctx, path_session.c_str(), session_tokens.data(), session_tokens.size());
-    }
+    }   
 
+    //lxm: statistics
+    uint64_t acc_time = my_get_accumulated_time();//decode所有层计算的时间
+    uint64_t acc_count = my_get_accumulated_count()-2;
+    uint32_t n_expert = model->hparams.n_expert;
+    uint32_t n_expert_used = model->hparams.n_expert_used;
+    uint32_t n_moe_layer = model->hparams.n_layer - model->hparams.n_layer_dense_lead;
+    
+    
     LOG("\n\n");
+    LOG("Summary: \n|Total %ld Moe_layers | %ld expert/layer | %ld expert/layer used|\n\n",n_moe_layer,n_expert,n_expert_used);
+    LOG("Accumulated time: %.6f s\n", (unsigned long long) acc_time / 1000000.0);
+    LOG("Accumulated count: %llu tokens\n", (unsigned long long) acc_count);
+    LOG("\n");
+    llama_model_decoder_start_token(model);
+    auto io_status = get_io_status();
+    uint64_t cnt = io_status[0];
+    uint64_t size = io_status[1];
+    uint64_t time = io_status[2];//IO的时间
+    LOG("I/O stats: %llu MB, %.6f s\n", (unsigned long long) size/1024/1024, (unsigned long long) time / 1000000.0);
+    LOG("I/O stats: %.2f MB/s, %.2f ms/expert\n",
+            (double) size / (time / 1000000.0)/1024/1024, (double)  (time / 1000.0)/(acc_count*n_expert_used*n_moe_layer));
+    LOG("\n");
+
+    auto total_time = (acc_time / acc_count)/n_moe_layer/1000.0;
+    auto total_time_io = (time / acc_count)/n_moe_layer/1000.0;
+    LOG("Decoding time:     %.6f ms/layer\n", (double)total_time);
+    LOG("IO time:           %.6f ms/layer\n", (double) total_time_io);
+    LOG("Calculation time:  %.6f ms/layer\n",(double) total_time-total_time_io);
+    LOG("\n");
+
     common_perf_print(ctx, smpl);
 
     common_sampler_free(smpl);

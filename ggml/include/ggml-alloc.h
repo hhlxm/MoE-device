@@ -19,7 +19,9 @@ struct ggml_tallocr {
 };
 
 GGML_API struct ggml_tallocr ggml_tallocr_new(ggml_backend_buffer_t buffer);
+GGML_API struct ggml_tallocr my_ggml_tallocr_new(ggml_backend_buffer_t buffer);
 GGML_API enum ggml_status    ggml_tallocr_alloc(struct ggml_tallocr * talloc, struct ggml_tensor * tensor);
+GGML_API enum ggml_status    my_ggml_tallocr_alloc(struct ggml_tallocr * talloc, struct ggml_tensor * tensor);
 
 // Graph allocator
 /*
@@ -69,6 +71,7 @@ GGML_API size_t ggml_gallocr_get_buffer_size(ggml_gallocr_t galloc, int buffer_i
 // Utils
 // Create a buffer and allocate all the tensors in a ggml_context
 GGML_API struct ggml_backend_buffer * ggml_backend_alloc_ctx_tensors_from_buft(struct ggml_context * ctx, ggml_backend_buffer_type_t buft);
+GGML_API struct ggml_backend_buffer * my_ggml_backend_alloc_ctx_tensors_from_buft(struct ggml_context * ctx,struct ggml_tensor * t,int reduction,int origin_size);
 GGML_API struct ggml_backend_buffer * ggml_backend_alloc_ctx_tensors(struct ggml_context * ctx, ggml_backend_t backend);
 
 #ifdef  __cplusplus

@@ -16,7 +16,7 @@ extern "C" {
         int n_threads;
         struct ggml_threadpool * threadpool;
 
-        // abort ggml_graph_compute when true
+        // abort  when true
         ggml_abort_callback abort_callback;
         void *              abort_callback_data;
     };
@@ -103,6 +103,12 @@ extern "C" {
     GGML_BACKEND_API int ggml_cpu_has_vxe        (void);
     GGML_BACKEND_API int ggml_cpu_has_wasm_simd  (void);
     GGML_BACKEND_API int ggml_cpu_has_llamafile  (void);
+    //lxm: calculate total layer forward time
+    GGML_BACKEND_API uint64_t my_get_accumulated_time(void);
+    GGML_BACKEND_API uint64_t my_get_accumulated_count(void);
+    GGML_BACKEND_API uint64_t my_get_load_time(void);
+    GGML_BACKEND_API uint64_t my_get_load_count(void);
+
 
     // Internal types and functions exposed for tests and benchmarks
 

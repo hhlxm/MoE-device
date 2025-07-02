@@ -37,7 +37,7 @@ struct llama_model_loader {
                 throw std::runtime_error(format("tensor '%s' not found in the model", ggml_get_name(tensor)));
             }
 
-            offs = gguf_get_data_offset(gguf_ctx) + gguf_get_tensor_offset(gguf_ctx, tensor_idx);
+            offs = gguf_get_data_offset(gguf_ctx) + gguf_get_tensor_offset(gguf_ctx, tensor_idx);//模型权重部分在文件中的起始地址+tensor本身的offset
             if (offs + ggml_nbytes(tensor) < offs || offs + ggml_nbytes(tensor) > file->size()) {
                 throw std::runtime_error(format("tensor '%s' data is not within the file bounds, model is corrupted or incomplete", ggml_get_name(tensor)));
             }
@@ -162,6 +162,14 @@ struct llama_model_loader {
             llama_mlocks * lmlocks,
             llama_progress_callback progress_callback,
             void * progress_callback_user_data);
+
+    bool my_load_all_data(
+        struct ggml_context * ctx,
+        llama_buf_map & bufs,
+        llama_mlocks * lmlocks,
+        llama_progress_callback progress_callback,
+        void * progress_callback_user_data
+    );
 
     std::string ftype_name() const;
 

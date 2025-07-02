@@ -5,7 +5,7 @@
 #include "llama-mmap.h"
 #include "llama-model.h"
 #include "llama-kv-cache.h"
-
+#include "llama-model-loader.h"
 #include <cstring>
 #include <stdexcept>
 #include <cinttypes>
@@ -846,6 +846,49 @@ int llama_context::encode(llama_batch & inp_batch) {
     return 0;
 }
 
+int parse_blk_ffn_exps(const char *str) {
+    const char *prefix = "blk.";
+    const char *suffix_gate = ".ffn_gate_exps.weight";
+    const char *suffix_up   = ".ffn_up_exps.weight";
+    const char *suffix_down = ".ffn_down_exps.weight";
+
+    if (strncmp(str, prefix, strlen(prefix)) != 0) {
+        return 0; // 不匹配前缀
+    }
+
+    // 查找第一个 '.' 后面的数字部分
+    const char *dot = strchr(str + strlen(prefix), '.');
+    if (dot == NULL) {
+        return 0; // 没有第二个点
+    }
+
+    // 提取 layer_id 字符串
+    size_t len = dot - (str + strlen(prefix));
+    char num_str[16];
+    memcpy(num_str, str + strlen(prefix), len);
+    num_str[len] = '\0';
+
+    char *endptr;
+    long lid = strtol(num_str, &endptr, 10);
+    if (*endptr != '\0') {
+        return 0; // 非法数字格式
+    }
+
+    // 判断后缀
+    if (strstr(str, suffix_gate) != NULL) {
+        ;
+    } else if (strstr(str, suffix_up) != NULL) {
+        ;
+    } else if (strstr(str, suffix_down) != NULL) {
+        ;
+    } else {
+        return 0; // 不是任何一种模式
+    }
+
+    return 1; // 匹配成功
+}
+
+
 int llama_context::decode(llama_batch & inp_batch) {
     if (!memory) {
         LLAMA_LOG_WARN("%s: cannot decode batches with this context (use llama_encode() instead)\n", __func__);
@@ -952,6 +995,52 @@ int llama_context::decode(llama_batch & inp_batch) {
             // needs to happen before the graph is built
             n_outputs = n_outputs_new;
         }
+        {  //decode stage rebuild buffer
+            // 找到expert的ctx，重新分配相同类型的buft的buffer，然后释放buffer
+            // 再看是否有其他的非expert在ctx中，如果有的话，还得在buffer中load对应的非expert的tensor
+            // struct ggml_tensor * first = nullptr;
+            // ggml_backend_buffer_t arch_buf;
+            // ggml_backend_buffer_t buf;
+            if(j_decode==0 && ubatch.n_tokens==1)
+            {
+                j_decode=1;
+
+                for (const auto& ctx_ptr : model.get_pimpl_ctx()) {
+                    auto* ctx = ctx_ptr.get();
+                    struct ggml_tensor* first = ggml_get_first_tensor(ctx);
+
+                    int num_exp = 0, num_oth = 0;
+                    for (struct ggml_tensor* t = first; t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+                        if (parse_blk_ffn_exps(ggml_get_name(t)))
+                            ++num_exp;
+                        else
+                            ++num_oth;
+
+                        if (num_exp && num_oth)
+                            break;  // 混合型，跳出
+                    }
+
+                    if (num_exp == 0) {
+                        continue;  // 没有 expert tensor，跳过
+                    }
+
+                    // 分配 expert buffer
+                    auto* buf = my_ggml_backend_alloc_ctx_tensors_from_buft(
+                        ctx, first, model.hparams.n_expert_used, model.hparams.n_expert);
+                    ggml_backend_buffer_set_usage(buf, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+                    model.reset_pimpl_bufs(buf);
+
+                    if (num_oth != 0) {
+                        // 有 non-expert tensor，需要加载额外数据
+                        llama_buf_map buf_map;
+                        buf_map.reserve(1);
+                        buf_map.emplace(0, buf);
+                        model.ml->my_load_all_data(
+                            ctx, buf_map, nullptr, model.params.progress_callback, model.params.progress_callback_user_data);
+                    }
+                }
+            }
+        }
 
         // find KV slot
         if (!kv_self->find_slot(ubatch)) {
@@ -987,6 +1076,8 @@ int llama_context::decode(llama_batch & inp_batch) {
         //if (n_past%100 == 0) {
         //    ggml_graph_dump_dot(gf, NULL, "llama.dot");
         //}
+
+        // ggml_graph_dump_dot(gf, NULL, "/home/wangtuowei/lxm/llama.dot");
 
         auto * t_logits = cparams.embeddings ? nullptr         : res->get_logits();
         auto * t_embd   = cparams.embeddings ? res->get_embd() : nullptr;

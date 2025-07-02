@@ -6,7 +6,7 @@
 #include "llama-model-loader.h"
 #include "llama-model-saver.h"
 #include "llama-model.h"
-
+#include "expertload.hh"
 #include "ggml.h"
 #include "ggml-backend.h"
 
@@ -83,6 +83,8 @@ int64_t llama_time_us(void) {
     return ggml_time_us();
 }
 
+
+llama_model_loader * ml =nullptr;
 // Returns 0 on success, -1 on error, and -2 on cancellation via llama_progress_callback
 static int llama_model_load(const std::string & fname, std::vector<std::string> & splits, llama_model & model, llama_model_params & params) {
     // loading time will be recalculated after the first eval, so
@@ -93,29 +95,32 @@ static int llama_model_load(const std::string & fname, std::vector<std::string> 
     model.t_start_us = tm.t_start_us;
 
     try {
-        llama_model_loader ml(fname, splits, params.use_mmap, params.check_tensors, params.kv_overrides, params.tensor_buft_overrides);
+        // llama_model_loader ml(fname, splits, params.use_mmap, params.check_tensors, params.kv_overrides, params.tensor_buft_overrides);
+        ml = new llama_model_loader(fname, splits, params.use_mmap, params.check_tensors, params.kv_overrides, params.tensor_buft_overrides);
 
-        ml.print_info();
+        ml->print_info();
 
         model.hparams.vocab_only = params.vocab_only;
 
         try {
-            model.load_arch(ml);
+            model.load_arch(*ml);
         } catch(const std::exception & e) {
             throw std::runtime_error("error loading model architecture: " + std::string(e.what()));
         }
         try {
-            model.load_hparams(ml);
+            model.load_hparams(*ml);
         } catch(const std::exception & e) {
             throw std::runtime_error("error loading model hyperparameters: " + std::string(e.what()));
         }
         try {
-            model.load_vocab(ml);
+            model.load_vocab(*ml);
         } catch(const std::exception & e) {
             throw std::runtime_error("error loading model vocabulary: " + std::string(e.what()));
         }
 
-        model.load_stats(ml);
+        model.load_stats(*ml);
+        auto & loader = expert_loader::get_instance();
+        loader.init(model.hparams,model.name);
         model.print_info();
 
         if (params.vocab_only) {
@@ -123,7 +128,7 @@ static int llama_model_load(const std::string & fname, std::vector<std::string> 
             return 0;
         }
 
-        if (!model.load_tensors(ml)) {
+        if (!model.load_tensors(*ml)) {
             return -2;
         }
     } catch (const std::exception & err) {
@@ -227,6 +232,7 @@ static struct llama_model * llama_model_load_from_file_impl(
         return nullptr;
     }
 
+    model->ml = ml;
     return model;
 }
 

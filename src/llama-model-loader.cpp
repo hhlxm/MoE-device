@@ -1,7 +1,7 @@
 #include "llama-model-loader.h"
 
 #include "ggml.h"
-
+#include "expertload.hh"
 #include <array>
 #include <cinttypes>
 #include <cstring>
@@ -301,12 +301,12 @@ namespace GGUFMeta {
             GGUFMeta::GKV<GGUFMeta::ArrayInfo>::get_kv(meta.get(), kid);
 
         switch (arr_info.gt) {
-            case GGUF_TYPE_UINT32:
-            case GGUF_TYPE_INT32:   GGML_ASSERT((std::is_same<T,  int32_t>::value) ||
-                                                (std::is_same<T, uint32_t>::value)); break;
-            case GGUF_TYPE_FLOAT32: GGML_ASSERT((std::is_same<T,    float>::value)); break;
+            case GGUF_TYPE_FLOAT32: GGML_ASSERT((std::is_same<T, float>::value)); break;
+            case GGUF_TYPE_INT32:   GGML_ASSERT(
+                                            (std::is_same<T,  int32_t>::value) ||
+                                            (std::is_same<T, uint32_t>::value));  break;
             default:
-                throw std::runtime_error(format("%s is not a float32/uint32/int32 array", key.c_str()));
+                throw std::runtime_error(format("%s is not a float32, int32 array", key.c_str()));
         }
 
         result.resize(arr_info.length);
@@ -330,12 +330,12 @@ namespace GGUFMeta {
             GGUFMeta::GKV<GGUFMeta::ArrayInfo>::get_kv(meta.get(), kid);
 
         switch (arr_info.gt) {
-            case GGUF_TYPE_UINT32:
-            case GGUF_TYPE_INT32:   GGML_ASSERT((std::is_same<T,  int32_t>::value) ||
-                                                (std::is_same<T, uint32_t>::value)); break;
-            case GGUF_TYPE_FLOAT32: GGML_ASSERT((std::is_same<T,    float>::value)); break;
+            case GGUF_TYPE_FLOAT32: GGML_ASSERT((std::is_same<T, float>::value)); break;
+            case GGUF_TYPE_INT32:   GGML_ASSERT(
+                                            (std::is_same<T,  int32_t>::value) ||
+                                            (std::is_same<T, uint32_t>::value));  break;
             default:
-                throw std::runtime_error(format("%s is not a float32/uint32/int32 array", key.c_str()));
+                throw std::runtime_error(format("%s is not a float32, int32 array", key.c_str()));
         }
 
         if (arr_info.length > N_MAX) {
@@ -469,7 +469,7 @@ llama_model_loader::llama_model_loader(
 
     meta.reset(gguf_init_from_file(fname.c_str(), params));
     if (!meta) {
-        throw std::runtime_error(format("%s: failed to load model from %s", __func__, fname.c_str()));
+        throw std::runtime_error(format("%s: failed to load model from %s\n", __func__, fname.c_str()));
     }
 
     get_key(llm_kv(LLM_KV_GENERAL_ARCHITECTURE), arch_name, false);
@@ -528,7 +528,7 @@ llama_model_loader::llama_model_loader(
             };
             gguf_context_ptr ctx_gguf { gguf_init_from_file(fname_split, split_params) };
             if (!ctx_gguf) {
-                throw std::runtime_error(format("%s: failed to load GGUF split from %s", __func__, fname_split));
+                throw std::runtime_error(format("%s: failed to load GGUF split from %s\n", __func__, fname_split));
             }
 
             // check idx
@@ -822,18 +822,9 @@ void llama_model_loader::init_mappings(bool prefetch, llama_mlocks * mlock_mmaps
         mappings.reserve(files.size());
         mmaps_used.reserve(files.size());
         for (const auto & file : files) {
-            bool is_numa = false;
-
-            auto * dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
-            if (dev) {
-                auto * reg = ggml_backend_dev_backend_reg(dev);
-                auto * is_numa_fn = (decltype(ggml_is_numa) *) ggml_backend_reg_get_proc_address(reg, "ggml_backend_cpu_is_numa");
-                if (is_numa_fn) {
-                    is_numa = is_numa_fn();
-                }
-            }
-
-            std::unique_ptr<llama_mmap> mapping = std::make_unique<llama_mmap>(file.get(), prefetch ? -1 : 0, is_numa);
+            auto * reg = ggml_backend_dev_backend_reg(ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU));
+            auto * is_numa_fn = (decltype(ggml_is_numa) *) ggml_backend_reg_get_proc_address(reg, "ggml_backend_cpu_is_numa");
+            std::unique_ptr<llama_mmap> mapping = std::make_unique<llama_mmap>(file.get(), prefetch ? -1 : 0, is_numa_fn());
             mmaps_used.emplace_back(mapping->size(), 0);
             if (mlock_mmaps) {
                 std::unique_ptr<llama_mlock> mlock_mmap(new llama_mlock());
@@ -889,6 +880,51 @@ void llama_model_loader::load_data_for(struct ggml_tensor * cur) const {
         throw std::runtime_error(format("tensor '%s' has invalid data", ggml_get_name(cur)));
     }
 }
+
+// 手动解析类似 "blk.12.ffn_gate_exps.weight" 这样的字符串
+int parse_blk_ffn_exps(const char *str, int *layer_id, int *m) {
+    const char *prefix = "blk.";
+    const char *suffix_gate = ".ffn_gate_exps.weight";
+    const char *suffix_up   = ".ffn_up_exps.weight";
+    const char *suffix_down = ".ffn_down_exps.weight";
+
+    if (strncmp(str, prefix, strlen(prefix)) != 0) {
+        return 0; // 不匹配前缀
+    }
+
+    // 查找第一个 '.' 后面的数字部分
+    const char *dot = strchr(str + strlen(prefix), '.');
+    if (dot == NULL) {
+        return 0; // 没有第二个点
+    }
+
+    // 提取 layer_id 字符串
+    size_t len = dot - (str + strlen(prefix));
+    char num_str[16];
+    memcpy(num_str, str + strlen(prefix), len);
+    num_str[len] = '\0';
+
+    char *endptr;
+    long lid = strtol(num_str, &endptr, 10);
+    if (*endptr != '\0') {
+        return 0; // 非法数字格式
+    }
+
+    // 判断后缀
+    if (strstr(str, suffix_gate) != NULL) {
+        *m = 0; // gate
+    } else if (strstr(str, suffix_up) != NULL) {
+        *m = 1; // up
+    } else if (strstr(str, suffix_down) != NULL) {
+        *m = 2; // down
+    } else {
+        return 0; // 不是任何一种模式
+    }
+
+    *layer_id = (int)lid;
+    return 1; // 匹配成功
+}
+
 
 bool llama_model_loader::load_all_data(
         struct ggml_context * ctx,
@@ -989,13 +1025,16 @@ bool llama_model_loader::load_all_data(
             ggml_backend_buft_name(ggml_backend_buffer_get_type(bufs.at(0))),
             ggml_backend_name(upload_backend));
     }
-
+    const char* name = nullptr;
     for (struct ggml_tensor * cur = ggml_get_first_tensor(ctx); cur != NULL; cur = ggml_get_next_tensor(ctx, cur)) {
-        const auto * weight = get_weight(ggml_get_name(cur));
+        name = ggml_get_name(cur);
+
+        const auto * weight = get_weight(name);
         if (weight == nullptr) {
             // this can happen with split experts models
             continue;
         }
+
 
         if (progress_callback) {
             if (!progress_callback((float) size_done / size_data, progress_callback_user_data)) {
@@ -1073,11 +1112,23 @@ bool llama_model_loader::load_all_data(
                 }
             }
         }
+        
+        int layer_id = 0;
+        int m = -1;
+        if (parse_blk_ffn_exps(name, layer_id, m)) {
+            auto & loader = expert_loader::get_instance();
+            bool ret = loader.write_experts(layer_id, cur, m);
+            if (!ret) {
+                throw std::runtime_error(format("%s: failed to write experts for layer %d, tensor '%s'", __func__, layer_id, name));
+            }
+        }
+
 
         size_done += n_size;
     }
 
     // free temporary resources used for async uploads
+    // second:5G third:1G
     for (auto * event : events) {
         ggml_backend_event_synchronize(event);
         ggml_backend_event_free(event);
@@ -1118,6 +1169,241 @@ bool llama_model_loader::load_all_data(
             // cancellation since we need to free allocations.
             return progress_callback(1.0f, progress_callback_user_data);
         }
+    }
+
+    return true;
+}
+
+
+bool llama_model_loader::my_load_all_data(
+        struct ggml_context * ctx,
+        llama_buf_map & bufs,
+        llama_mlocks * lmlocks,
+        llama_progress_callback progress_callback,
+        void * progress_callback_user_data
+    ) {
+    GGML_ASSERT(size_data != 0 && "call init_mappings() first");
+
+    std::vector<no_init<uint8_t>> read_buf;
+    std::vector<std::future<std::pair<ggml_tensor *, bool>>> validation_result;
+
+    // 4 staging buffers for async uploads, each sized 1MB seems to be a good default for single NVMe drives.
+    // NVMe raid configurations might require more / larger buffers.
+    constexpr size_t n_buffers = 4;
+    constexpr size_t buffer_size = 1 * 1024 * 1024; // 1MB
+
+    std::vector<ggml_backend_buffer_t> host_buffers;
+    std::vector<ggml_backend_event_t> events;
+    std::vector<void *> host_ptrs;
+    size_t buffer_idx = 0; // buffer to use for async loads
+    ggml_backend_t upload_backend = [&](const char * func) -> ggml_backend_t {
+        if (use_mmap || check_tensors) {
+            return nullptr;
+        }
+        // When not using mmaped io use async uploads from pinned memory to GPU memory.
+        // First determine if the backend supports the necessary features for async uploads.
+        auto * buf = bufs.count(0) ? bufs.at(0) : nullptr;
+        if (!buf) {
+            LLAMA_LOG_DEBUG("%s: no buffer found for async uploads\n", func);
+            return nullptr;
+        }
+
+        auto * buft = ggml_backend_buffer_get_type(buf);
+        auto * dev = ggml_backend_buft_get_device(buft);
+        if (!dev) {
+            LLAMA_LOG_DEBUG("%s: no device found for buffer type %s for async uploads\n", func,
+                ggml_backend_buft_name(buft));
+            return nullptr;
+        }
+
+        if (buft != ggml_backend_dev_buffer_type(dev)) {
+            LLAMA_LOG_DEBUG("%s: buffer type %s is not the default buffer type for device %s for async uploads\n", func,
+                ggml_backend_buft_name(buft), ggml_backend_dev_name(dev));
+            return nullptr;
+        }
+
+        ggml_backend_dev_props props;
+        ggml_backend_dev_get_props(dev, &props);
+        if (!props.caps.async || !props.caps.host_buffer || !props.caps.events) {
+            LLAMA_LOG_DEBUG("%s: device %s does not support async, host buffers or events\n", func,
+                ggml_backend_dev_name(dev));
+            return nullptr;
+        }
+
+        auto * host_buft = ggml_backend_dev_host_buffer_type(dev);
+        if (!host_buft) {
+            LLAMA_LOG_DEBUG("%s: no host buffer type found for device %s\n", func,
+                ggml_backend_dev_name(dev));
+            return nullptr;
+        }
+
+        // If the backend is supported, create pinned memory buffers and events for synchronisation.
+        for (size_t idx = 0; idx < n_buffers; ++idx) {
+            auto * buf = ggml_backend_buft_alloc_buffer(host_buft, buffer_size);
+            if (!buf) {
+                LLAMA_LOG_DEBUG("%s: failed to allocate host buffer for async uploads for device %s\n", func,
+                    ggml_backend_dev_name(dev));
+                return nullptr;
+            }
+
+            host_buffers.emplace_back(buf);
+            host_ptrs.emplace_back(ggml_backend_buffer_get_base(buf));
+
+            auto * event = ggml_backend_event_new(dev);
+            if (!event) {
+                LLAMA_LOG_DEBUG("%s: failed to create event for async uploads for device %s\n", func,
+                    ggml_backend_dev_name(dev));
+                return nullptr;
+            }
+
+            events.emplace_back(event);
+        }
+
+        ggml_backend_t backend = ggml_backend_dev_init(dev, nullptr);
+        if (!backend) {
+            LLAMA_LOG_DEBUG("%s: failed to initialize backend for device %s for async uploads\n", func,
+                ggml_backend_dev_name(dev));
+            return nullptr;
+        }
+
+        return backend;
+    }(__func__);
+
+    if (upload_backend) {
+        LLAMA_LOG_DEBUG("%s: using async uploads for device %s, buffer type %s, backend %s\n", __func__,
+            ggml_backend_dev_name(ggml_backend_get_device(upload_backend)),
+            ggml_backend_buft_name(ggml_backend_buffer_get_type(bufs.at(0))),
+            ggml_backend_name(upload_backend));
+    }
+    const char* name = nullptr;
+    for (struct ggml_tensor * cur = ggml_get_first_tensor(ctx); cur != NULL; cur = ggml_get_next_tensor(ctx, cur)) {
+        name = ggml_get_name(cur);
+
+        int layer_id = 0;
+        int m = -1;
+
+        const auto * weight = get_weight(name);
+        if (weight == nullptr) {
+            // this can happen with split experts models
+            continue;
+        }
+
+        if (parse_blk_ffn_exps(name, layer_id, m)) {//动态加载的东西跳过
+            continue;
+        }
+
+        size_t n_size = ggml_nbytes(cur);
+
+        if (use_mmap) {
+            const auto & mapping = mappings.at(weight->idx);
+            ggml_backend_buffer_t buf_mmap = nullptr;
+            if (bufs.count(weight->idx)) {
+                buf_mmap = bufs.at(weight->idx);
+            }
+            uint8_t * data = (uint8_t *) mapping->addr() + weight->offs;
+
+            if (check_tensors) {
+                validation_result.emplace_back(std::async(std::launch::async, [cur, data, n_size] {
+                    return std::make_pair(cur, ggml_validate_row_data(cur->type, data, n_size));
+                }));
+            }
+
+            GGML_ASSERT(buf_mmap || cur->data); // either we have a buffer to allocate the tensor in, or it is already allocated
+            if (buf_mmap && cur->data == nullptr) {
+                ggml_backend_tensor_alloc(buf_mmap, cur, data);
+                if (lmlocks) {
+                    const auto & lmlock = lmlocks->at(weight->idx);
+                    lmlock->grow_to(weight->offs + n_size);
+                }
+
+                auto & mmap_used = mmaps_used[weight->idx];
+                mmap_used.first  = std::min(mmap_used.first,  weight->offs);
+                mmap_used.second = std::max(mmap_used.second, weight->offs + n_size);
+            } else {
+                ggml_backend_tensor_set(cur, data, 0, n_size);
+            }
+        } else {
+            const auto & file = files.at(weight->idx);
+            if (ggml_backend_buffer_is_host(cur->buffer)) {
+                file->seek(weight->offs, SEEK_SET);//把文件指针移动到对的地方
+                file->read_raw(cur->data, n_size);//写数据到data指针中去
+                if (check_tensors) {
+                    validation_result.emplace_back(std::async(std::launch::async, [cur, n_size] {
+                        return std::make_pair(cur, ggml_validate_row_data(cur->type, cur->data, n_size));
+                    }));
+                }
+            } else {
+                // If upload_backend is valid load the tensor in chunks to pinned memory and upload the buffers asynchronously to the GPU.
+                if (upload_backend) {
+                    file->seek(weight->offs, SEEK_SET);
+
+                    size_t bytes_read = 0;
+
+                    while (bytes_read < n_size) {
+                        size_t read_iteration = std::min<size_t>(buffer_size, n_size - bytes_read);
+
+                        ggml_backend_event_synchronize(events[buffer_idx]);
+                        file->read_raw(host_ptrs[buffer_idx], read_iteration);
+                        ggml_backend_tensor_set_async(upload_backend, cur, host_ptrs[buffer_idx], bytes_read, read_iteration);
+                        ggml_backend_event_record(events[buffer_idx], upload_backend);
+
+                        bytes_read += read_iteration;
+                        ++buffer_idx;
+                        buffer_idx %= n_buffers;
+                    }
+                } else {
+                    read_buf.resize(n_size);
+                    file->seek(weight->offs, SEEK_SET);
+                    file->read_raw(read_buf.data(), n_size);
+                    ggml_backend_tensor_set(cur, read_buf.data(), 0, n_size);
+                    if (check_tensors && !ggml_validate_row_data(cur->type, read_buf.data(), n_size)) {
+                        throw std::runtime_error(format("tensor '%s' has invalid data", ggml_get_name(cur)));
+                    }
+                }
+            }
+        }
+
+        size_done += n_size;
+    }
+
+    // free temporary resources used for async uploads
+    // second:5G third:1G
+    for (auto * event : events) {
+        ggml_backend_event_synchronize(event);
+        ggml_backend_event_free(event);
+    }
+    for (auto * buf : host_buffers) {
+        ggml_backend_buffer_free(buf);
+    }
+    ggml_backend_free(upload_backend);
+
+    // check validation results
+    bool validation_failed = false;
+    for (auto & future : validation_result) {
+        auto result = future.get();
+        if (!result.second) {
+            LLAMA_LOG_ERROR("%s: tensor '%s' has invalid data\n", __func__, ggml_get_name(result.first));
+            validation_failed = true;
+        }
+    }
+    if (validation_failed) {
+        throw std::runtime_error("found tensors with invalid data");
+    }
+
+    // check if this is the last call and do final cleanup
+    if (size_done >= size_data) {
+        // unmap offloaded tensors and metadata
+        if (use_mmap) {
+            for (uint32_t idx = 0; idx < mappings.size(); idx++) {
+                const auto & mmap_used = mmaps_used.at(idx);
+                auto & mapping = mappings.at(idx);
+                mapping->unmap_fragment(0, mmap_used.first);
+                if (mmap_used.second != 0) {
+                    mapping->unmap_fragment(mmap_used.second, mapping->size());
+                }
+            }
+        }
+
     }
 
     return true;

@@ -519,6 +519,10 @@ extern "C" {
         GGML_OP_OPT_STEP_ADAMW,
 
         GGML_OP_COUNT,
+
+        //lxm: expert upload/offload
+        MYML_OP_EXPERT_UPLOAD,
+        MYML_OP_EXPERT_OFFLOAD,
     };
 
     enum ggml_unary_op {
@@ -2197,6 +2201,25 @@ extern "C" {
     GGML_API void                          ggml_threadpool_params_init   (struct ggml_threadpool_params * p, int n_threads);
     GGML_API bool                          ggml_threadpool_params_match  (const struct ggml_threadpool_params * p0, const struct ggml_threadpool_params * p1);
 
+    //lxm: function define
+    GGML_API struct ggml_tensor * mygf_expert_upload(
+        struct ggml_context * ctx,
+        struct ggml_tensor * gate_exps,
+        struct ggml_tensor * up_exps,
+        struct ggml_tensor * down_exps,
+        struct ggml_tensor * selected_experts,//TODO
+        int il,
+        int m); // m: 0=gate, 1=up, 2=down
+
+    GGML_API struct ggml_tensor * mygf_expert_offload(
+        struct ggml_context * ctx,
+        struct ggml_tensor * gate_exps,
+        struct ggml_tensor * up_exps,
+        struct ggml_tensor * down_exps,
+        int expert_ids,
+        int il,
+        int m);
+    
 #ifdef  __cplusplus
 }
 #endif

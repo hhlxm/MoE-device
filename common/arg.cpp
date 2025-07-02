@@ -3344,5 +3344,21 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}));
 
+    //lxm:
+    add_opt(common_arg(
+        {"-exp-off", "--expert-offload"},
+        "offload expert parameters to disk",
+        [](common_params & params) {
+            params.expert_offload = true;
+        }
+        ));
+    add_opt(common_arg(
+        {"-mem-exp", "--max-expert-memory"}, "N",
+        string_format("max number of experts in memory (default: %d)", params.max_expert_memory),
+        [](common_params & params, int value) {
+            params.max_expert_memory = value;
+        }
+    ));
+
     return ctx_arg;
 }
