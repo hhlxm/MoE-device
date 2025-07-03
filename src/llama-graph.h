@@ -509,23 +509,23 @@ struct llm_graph_context {
                      int   il,
                     ggml_cgraph * gf = nullptr) const;
 
-    // ggml_tensor * my_build_moe_ffn(
-    //          ggml_tensor * cur,
-    //          ggml_tensor * gate_inp,
-    //          ggml_tensor * predictor,
-    //          ggml_tensor * gate_exps,
-    //          ggml_tensor * down_exps,
-    //          ggml_tensor * exp_probs_b,
-    //              int64_t   n_expert,
-    //              int64_t   n_expert_used,
-    //      llm_ffn_op_type   type_op,
-    //                 bool   norm_w,
-    //                 bool   scale_w,
-    //                float   w_scale,
-    //         llama_expert_gating_func_type gating_op,
-    //                  int   il,
-    //                 ggml_cgraph * gf = nullptr,
-    //                 ggml_tensor * predictor_inp=nullptr) const;
+    ggml_tensor * my_build_moe_ffn(
+             ggml_tensor * cur,
+             ggml_tensor * gate_inp,
+             ggml_tensor * predictor,
+             ggml_tensor * gate_exps,
+             ggml_tensor * down_exps,
+             ggml_tensor * exp_probs_b,
+                 int64_t   n_expert,
+                 int64_t   n_expert_used,
+         llm_ffn_op_type   type_op,
+                    bool   norm_w,
+                    bool   scale_w,
+                   float   w_scale,
+            llama_expert_gating_func_type gating_op,
+                     int   il,
+                    ggml_cgraph * gf = nullptr,
+                    ggml_tensor * predictor_inp=nullptr) const;
 
     //
     // inputs

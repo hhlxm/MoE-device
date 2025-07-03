@@ -1233,12 +1233,6 @@ ggml_backend_buffer_t ggml_backend_alloc_ctx_tensors_from_buft(struct ggml_conte
     struct ggml_tensor * first = ggml_get_first_tensor(ctx);
     //lxm:计算大小
     for (struct ggml_tensor * t = first; t != NULL; t = ggml_get_next_tensor(ctx, t)) {
-        int layer_id,m;
-        // if (parse_blk_ffn_exps(ggml_get_name(t), &layer_id, &m)) 
-        // {
-        //     printf("%s: skipping expert layer %d in tensor '%s'\n", __func__, layer_id, ggml_get_name(t));
-        //     continue;
-        // }
         size_t this_size = 0;
         if (t->data == NULL && t->view_src == NULL) {
             this_size = GGML_PAD(ggml_backend_buft_get_alloc_size(buft, t), alignment);

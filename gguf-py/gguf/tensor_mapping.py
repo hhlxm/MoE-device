@@ -293,6 +293,10 @@ class TensorNameMap:
             "encoder.layers.{bid}.mlp.router.layer",            # nomic-bert-moe
         ),
 
+        MODEL_TENSOR.FFN_PREDICTOR_INP: (
+            "model.layers.{bid}.predictor.linear",                  #lxmm
+        ),
+
         MODEL_TENSOR.FFN_GATE_INP_SHEXP: (
             "model.layers.{bid}.mlp.shared_expert_gate", # qwen2moe
         ),

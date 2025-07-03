@@ -221,6 +221,7 @@ struct llama_layer {
 
     // ff MoE
     struct ggml_tensor * ffn_gate_inp  = nullptr;
+    struct ggml_tensor * ffn_predictor_inp = nullptr;//lxmm
     struct ggml_tensor * ffn_gate_exps = nullptr;
     struct ggml_tensor * ffn_down_exps = nullptr;
     struct ggml_tensor * ffn_up_exps   = nullptr;

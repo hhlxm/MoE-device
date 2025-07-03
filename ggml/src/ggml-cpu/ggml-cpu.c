@@ -2885,7 +2885,7 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
     };
 
     uint64_t t_start,t_end;
-
+    t_start = ggml_time_us();UNUSED(t_start);
     for (int node_n = 0; node_n < cgraph->n_nodes && atomic_load_explicit(&tp->abort, memory_order_relaxed) != node_n; node_n++) {
         struct ggml_tensor * node = cgraph->nodes[node_n];
         char * name = ggml_get_name(node);
@@ -2903,7 +2903,7 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
             tp->ec    = GGML_STATUS_ABORTED;
         }
 
-        if(state->ith == 0&&strcmp(ggml_get_name(node),"ffn_inp-0")==0 ) {
+        if(state->ith == 0&&strcmp(ggml_get_name(node),"xxx-0")==0 ) {
             //start
             atomic_fetch_add(&s_accumulated_count, 1);
             if(my_get_accumulated_count()<2) {
@@ -2914,7 +2914,7 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
                 t_start = ggml_time_us();UNUSED(t_start);
             }
         }
-        else if( state->ith == 0&&strcmp(ggml_get_name(node),"l_out-15")==0 ) {
+        else if( state->ith == 0&&strcmp(ggml_get_name(node),"xxx-26")==0 ) {
             //end
             if(my_get_accumulated_count()<2) {
               ;  
@@ -2934,6 +2934,11 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
 
     }
     ggml_barrier(state->threadpool);
+    t_end = ggml_time_us();UNUSED(t_end);
+    if(state->ith == 0) {
+        //lxm:输出累积时间和计数
+        printf("\nthread %d: finished processing %d nodes in %.4f ms\n", state->ith, cgraph->n_nodes, (unsigned long long)(t_end - t_start)/1000.0);
+    }
 
     return 0;
 }
