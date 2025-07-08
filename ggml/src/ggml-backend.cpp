@@ -60,7 +60,8 @@ size_t ggml_backend_buft_get_alloc_size(ggml_backend_buffer_type_t buft, const s
     // get_alloc_size is optional, defaults to ggml_nbytes
     if (buft->iface.get_alloc_size) {
         size_t size = buft->iface.get_alloc_size(buft, tensor);
-        assert(size >= ggml_nbytes(tensor));
+        size_t size1 = ggml_nbytes(tensor);
+        assert(size >= size1);
         return size;
     }
     return ggml_nbytes(tensor);
@@ -759,7 +760,7 @@ static int ggml_backend_sched_backend_id_from_cur(ggml_backend_sched_t sched, st
 
     //lxm
     if  (tensor->op == MYML_OP_EXPERT_UPLOAD || 
-        tensor->op == MYML_OP_EXPERT_OFFLOAD ) {
+        tensor->op == MYML_OP_EXPERT_OFFLOAD || MYML_OP_LAYERS_UPLOAD || MYML_OP_LAYERS_UPLOAD_END || MYML_OP_EXPERT_UPLOAD_END ||MYML_OP_LAYERS_FREE) {
         return 0;
     }
 

@@ -11,6 +11,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <map>
 
 struct llama_cparams;
 struct llama_ubatch;
@@ -353,6 +354,7 @@ struct llama_model {
 
     //lxm: save ml
     struct llama_model_loader * ml = nullptr; // model loader, used for loading tensors
+    std::map<ggml_backend_buffer_type_t, ggml_context *> ctx_map ; // context map for different buffer types
 
     std::vector<llama_layer> layers;
 
@@ -378,6 +380,7 @@ struct llama_model {
     void load_hparams(llama_model_loader & ml);
     void load_vocab  (llama_model_loader & ml);
     bool load_tensors(llama_model_loader & ml); // returns false if cancelled by progress_callback
+    bool my_moe_load_tensors(llama_model_loader & ml); // returns false if cancelled by progress_callback
 
     std::string arch_name() const;
     std::string type_name() const;

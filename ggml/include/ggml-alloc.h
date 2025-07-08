@@ -71,7 +71,8 @@ GGML_API size_t ggml_gallocr_get_buffer_size(ggml_gallocr_t galloc, int buffer_i
 // Utils
 // Create a buffer and allocate all the tensors in a ggml_context
 GGML_API struct ggml_backend_buffer * ggml_backend_alloc_ctx_tensors_from_buft(struct ggml_context * ctx, ggml_backend_buffer_type_t buft);
-GGML_API struct ggml_backend_buffer * my_ggml_backend_alloc_ctx_tensors_from_buft(struct ggml_context * ctx,struct ggml_tensor * t,int reduction,int origin_size);
+GGML_API struct ggml_backend_buffer * my_ggml_backend_alloc_ctx_tensors_from_buft(struct ggml_context * ctx,ggml_backend_buffer_type_t buft,int reduction,int origin_size);
+GGML_API struct ggml_backend_buffer ** my2_ggml_backend_alloc_ctx_tensors_from_buft(struct ggml_context * ctx, ggml_backend_buffer_type_t buft,size_t* n_buffers);
 GGML_API struct ggml_backend_buffer * ggml_backend_alloc_ctx_tensors(struct ggml_context * ctx, ggml_backend_t backend);
 
 #ifdef  __cplusplus

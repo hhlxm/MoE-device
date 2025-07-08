@@ -2,7 +2,7 @@
 #define GGML_COMMON_DECL_CPP
 #include "ggml-common.h"
 #include "ggml-backend-impl.h"
-
+#include "../ggml-impl.h"
 #include "ggml-quants.h"
 #include "ggml-impl.h"
 #include "ggml-cpu.h"
@@ -6032,7 +6032,6 @@ class tensor_traits_base : public ggml::cpu::tensor_traits {
   public:
     virtual int repack(struct ggml_tensor * t, const void * data, size_t data_size) = 0;
 };
-static int is_decode = 0;
 template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PARAM_TYPE> class tensor_traits : public tensor_traits_base {
 
     bool work_size(int /* n_threads */, const struct ggml_tensor * op, size_t & size) override {
@@ -6230,10 +6229,15 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
                 continue;
             }
 
-            const auto * src0_cur = (const char *) src0->data + cur_a*nb02;
-            if(ids->ne[1] ==1&&is_decode==4)
+            //得到专家权重
+            const char * src0_cur = NULL;
+            if(!run_states.IS_DECODE)
             {
-                src0_cur = (const char *) src0->data + (idx++) * GGML_PAD(nb02,LXM_ALIGNMENT);//lxm：挑出专家的权重：基址+第几个需要的专家*pad偏移大小
+                src0_cur = (const char *) src0->data + cur_a * GGML_PAD(nb02,LXM_ALIGNMENT);//lxm：挑出专家的权重：基址+专家号*偏移大小
+            }
+            if(ids->ne[1] ==1&&run_states.IS_DECODE)//decode
+            {
+                src0_cur = (const char *) src0->data + (idx++) * GGML_PAD(nb02,LXM_ALIGNMENT);//lxm：挑出专家的权重：基址+第几个专家*偏移大小
             }
 
 
@@ -6263,15 +6267,15 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
 
                 const auto * src1_col = (const char *) wdata + (i11 * nbw1 + i12 * nbw2);
 
-                gemv<BLOC_TYPE, INTER_SIZE, NB_COLS, PARAM_TYPE>(ne00,
-                        (float *)((char *) dst->data + (i1 * nb1 + i2 * nb2)) + src0_cur_start, ne01,
+                gemv<BLOC_TYPE, INTER_SIZE, NB_COLS, PARAM_TYPE>(
+                        ne00,
+                        (float *)((char *) dst->data + (i1 * nb1 + i2 * nb2)) + src0_cur_start,
+                         ne01,
                         src0_cur + src0_cur_start * nb01,
-                        src1_col, 1, src0_cur_end - src0_cur_start);
+                        src1_col, 
+                        1, 
+                        src0_cur_end - src0_cur_start);
             }
-        }
-        if(ids->ne[1] ==1&&is_decode<4)//最后一层
-        {
-            is_decode++;
         }
 #undef MMID_MATRIX_ROW
     }

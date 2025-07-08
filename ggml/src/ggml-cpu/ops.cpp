@@ -1,5 +1,5 @@
 #include "ops.h"
-
+#include "../ggml-impl.h"
 #include "ggml-cpu.h"
 #include "ggml-impl.h"
 #include "binary-ops.h"
@@ -8907,50 +8907,79 @@ void ggml_compute_forward_opt_step_adamw(
 }
 
 //lxm: function define
+//只在decode阶段进行
 void myml_compute_forward_expert_upload(const struct ggml_compute_params * params, struct ggml_tensor * dst) {
     if (params->ith != 0) return; // Main thread only，单线程去读写
     myml_expert_upload(params, dst);
+    return;
 }
-
+void myml_compute_forward_expert_upload_end(const struct ggml_compute_params * params, struct ggml_tensor * dst){
+    if (params->ith != 0) return; // Main thread only，单线程去读写
+    myml_expert_upload_end(params, dst);
+    return;
+}
 void myml_compute_forward_expert_offload(const struct ggml_compute_params * params, struct ggml_tensor * dst) {
     if (params->ith != 0) return; // Main thread only，单线程去读写
     myml_expert_offload(params, dst);
+    return;
 }
 
-static int judge_decode = 0;
-void myml_expert_upload(const struct ggml_compute_params * params, struct ggml_tensor * dst) {
+//只在prefill阶段进行
+void myml_compute_forward_layers_upload(const struct ggml_compute_params * params, struct ggml_tensor * dst){
+    if (params->ith != 0) return; // Main thread only，单线程去读写
+    myml_layers_upload(params, dst);
+    return;
+}
+void myml_compute_forward_layers_upload_end(const struct ggml_compute_params * params, struct ggml_tensor * dst){
+    if (params->ith != 0) return; // Main thread only，单线程去读写
+    myml_layers_upload_end(params, dst);
+    return;
+}
+
+void myml_compute_forward_layers_free(const struct ggml_compute_params * params, struct ggml_tensor * dst){
+    if( params->ith != 0) return; // Main thread only，单线程去读写
+    if(run_states.IS_DECODE==0) // 只在prefill阶段进行
+    {
+        struct ggml_tensor * gate_exps = dst->src[0];
+        struct ggml_tensor * up_exps = dst->src[1];
+        struct ggml_tensor * down_exps = dst->src[2];
+        ggml_backend_buffer_free(gate_exps->buffer);
+        ggml_backend_buffer_free(up_exps->buffer);
+        ggml_backend_buffer_free(down_exps->buffer);
+    }
+    return;
+}
+
+
+void myml_layers_upload(const struct ggml_compute_params * params, struct ggml_tensor * dst) {
     auto start = ggml_time_us();
     auto & loader = expert_loader::get_instance();
 
     int il = dst->op_params[0]; // Layer index
-    int m = dst->op_params[1];  // Expert type (0=gate, 1=up, 2=down)
 
     struct ggml_tensor * gate_exps = dst->src[0];
     struct ggml_tensor * up_exps = dst->src[1];
     struct ggml_tensor * down_exps = dst->src[2];
-    struct ggml_tensor * selected_experts = dst->src[3];
-    int n_expert_used = selected_experts->ne[0];
-    int n_tokens = selected_experts->ne[1];
-    int total_num = n_expert_used * n_tokens;
-    // 假设 selected_experts->data 是一个 int 数组
-    int * selected_experts_data = static_cast<int *>(selected_experts->data);
 
-    std::vector<int> selected_experts_vector(selected_experts_data, selected_experts_data + total_num);
-
-    if(judge_decode==0&&il==1&&selected_experts->ne[1] == 1)
+    if(run_states.IS_DECODE!=0)//只在prefill阶段做upload
     {
-        judge_decode=1;//decode start
+        return;
+    }
+    
+    std::vector<int> selected_experts_vector;
+    selected_experts_vector.reserve(gate_exps->ne[2]);
+    for(int i = 0; i < gate_exps->ne[2]; i++)//load所有的专家
+    {
+        selected_experts_vector.push_back(i);
     }
     
     std::vector<void *> dsts = {
-
         gate_exps->data ,
         up_exps->data   ,
         down_exps->data 
-
     };
 
-    if(judge_decode==1)
+    if(!run_states.IS_DECODE)
     {
         bool ok = loader.read_experts(il, selected_experts_vector, dsts);
         GGML_ASSERT(ok);
@@ -8960,6 +8989,63 @@ void myml_expert_upload(const struct ggml_compute_params * params, struct ggml_t
     auto end = ggml_time_us();
     auto duration = (end - start);
     // GGML_LOG_INFO("Layer %d Expert upload took %.3f ms\n",il, duration / 1000.0);
+}
+
+
+void myml_layers_upload_end(const struct ggml_compute_params * params, struct ggml_tensor * dst){
+    if(!run_states.IS_DECODE)
+    {
+        auto & loader = expert_loader::get_instance();
+
+        loader.wait_upload_finish(0);//-------------WAIT---------------//
+    }
+    return;
+}
+
+
+void myml_expert_upload(const struct ggml_compute_params * params, struct ggml_tensor * dst) {
+    auto & loader = expert_loader::get_instance();
+
+    int il = dst->op_params[0]; // Layer index
+
+    struct ggml_tensor * gate_exps = dst->src[0];
+    struct ggml_tensor * up_exps = dst->src[1];
+    struct ggml_tensor * down_exps = dst->src[2];
+    struct ggml_tensor * selected_experts = dst->src[3];
+
+    if(!run_states.IS_DECODE)
+    {
+        return;
+    }
+
+    int n_expert_used = selected_experts->ne[0];
+    int n_tokens = selected_experts->ne[1];
+    int total_num = n_expert_used * n_tokens;
+    // 假设 selected_experts->data 是一个 int 数组
+    int * selected_experts_data = static_cast<int *>(selected_experts->data);
+
+    std::vector<int> selected_experts_vector(selected_experts_data, selected_experts_data + total_num);
+
+    std::vector<void *> dsts = {
+        gate_exps->data ,
+        up_exps->data   ,
+        down_exps->data 
+    };
+    
+    if(run_states.IS_DECODE)
+    {
+        bool ok = loader.read_experts(il, selected_experts_vector, dsts);
+        GGML_ASSERT(ok);
+    }
+}
+
+void myml_expert_upload_end(const struct ggml_compute_params * params, struct ggml_tensor * dst) {
+    if(run_states.IS_DECODE)
+    {
+        auto & loader = expert_loader::get_instance();
+
+        loader.wait_upload_finish(1);//-------------WAIT---------------//
+    }
 }
 
 static int done = 1;
@@ -8996,24 +9082,6 @@ void myml_expert_offload(const struct ggml_compute_params * params, struct ggml_
         }
         done++; // 只执行一次
     }
-    // expert_ids.emplace_back(dst->op_params[2],); // Layer index and expert type
-
-    // int n_ids = dst->op_params[2];
-    // for (int i = 0; i < n_ids; i++) {
-    //     expert_ids[i] = dst->op_params[3 + i];
-    // }
-
-    // struct ggml_tensor * gate_exps = dst->src[0];
-    // struct ggml_tensor * up_exps = dst->src[1];
-    // struct ggml_tensor * down_exps = dst->src[2];
-    // std::vector<uint8_t *> srcs = {
-    //      (uint8_t *)gate_exps->data ,
-    //      (uint8_t *)up_exps->data   ,
-    //      (uint8_t *)down_exps->data 
-    // };
-
-    // bool ok = loader.write_experts(il, expert_ids, srcs);
-    // GGML_ASSERT(ok);
 
     auto end = ggml_time_us();
     auto duration = (end - start);

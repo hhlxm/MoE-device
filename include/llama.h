@@ -67,6 +67,8 @@ extern "C" {
     typedef int32_t llama_token;
     typedef int32_t llama_seq_id;
 
+    // static bool IS_DECODE = false;
+
     enum llama_vocab_type {
         LLAMA_VOCAB_TYPE_NONE = 0, // For models without vocab
         LLAMA_VOCAB_TYPE_SPM  = 1, // LLaMA tokenizer based on byte-level BPE with byte fallback

@@ -128,9 +128,19 @@ static int llama_model_load(const std::string & fname, std::vector<std::string> 
             return 0;
         }
 
-        if (!model.load_tensors(*ml)) {
-            return -2;
+        if(model.arch == LLM_ARCH_DEEPSEEK2) {
+            printf("!!use my_moe_load_tensors!!\n");
+            if (!model.my_moe_load_tensors(*ml)) {
+                return -2;
+            }
+        } 
+        else
+        {
+            if (!model.load_tensors(*ml)) {
+                return -2;
+            }
         }
+        
     } catch (const std::exception & err) {
         LLAMA_LOG_ERROR("%s: error loading model: %s\n", __func__, err.what());
         return -1;

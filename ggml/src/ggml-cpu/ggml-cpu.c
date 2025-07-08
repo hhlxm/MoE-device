@@ -1,6 +1,6 @@
 #define _CRT_SECURE_NO_DEPRECATE // Disables "unsafe" warnings on Windows
 #define _USE_MATH_DEFINES // For M_PI on MSVC
-
+#include "../ggml-impl.h"
 #include "ggml-backend-impl.h"
 #include "ggml-backend.h"
 #include "ggml-cpu-traits.h"
@@ -194,6 +194,7 @@ typedef pthread_t ggml_thread_t;
 #include <mach/mach.h>
 #include <TargetConditionals.h>
 #endif
+struct RUN_STATE run_states;
 
 static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
     [GGML_TYPE_F32] = {
@@ -1527,7 +1528,6 @@ static void * incr_ptr_aligned(void ** p, size_t size, size_t align) {
     *p = (void *) ((char *) ptr + size);
     return ptr;
 }
-static int is_decode = 0;
 static void ggml_compute_forward_mul_mat_id(
         const struct ggml_compute_params * params,
               struct ggml_tensor * dst) {
@@ -1649,12 +1649,19 @@ static void ggml_compute_forward_mul_mat_id(
         if (cne1 == 0) {
             continue;
         }
+
         //得到专家权重
-        const char * src0_cur = (const char *) src0->data + cur_a * nb02;//lxm：挑出专家的权重：基址+专家号*偏移大小
-        if(ids->ne[1] ==1&&is_decode==2)
+        const char * src0_cur = NULL;
+        if(!run_states.IS_DECODE)
+        {
+            src0_cur = (const char *) src0->data + cur_a * GGML_PAD(nb02,LXM_ALIGNMENT);//lxm：挑出专家的权重：基址+专家号*偏移大小
+        }
+        if(ids->ne[1] ==1&&run_states.IS_DECODE)//decode
         {
             src0_cur = (const char *) src0->data + (idx++) * GGML_PAD(nb02,LXM_ALIGNMENT);//lxm：挑出专家的权重：基址+第几个专家*偏移大小
         }
+
+
         const void * wdata = (src1->type == vec_dot_type) ? src1->data : params->wdata;
         const size_t row_size = ggml_row_size(vec_dot_type, ne10);//src0->nb[1]
 
@@ -1711,10 +1718,6 @@ static void ggml_compute_forward_mul_mat_id(
 
             current_chunk = atomic_fetch_add_explicit(current_chunk_ctr, 1, memory_order_relaxed);
         }
-    }
-    if(ids->ne[1] ==1&&is_decode<2)//最后一层
-    {
-        is_decode++;
     }
 }
 
@@ -2076,9 +2079,25 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             {
                 myml_compute_forward_expert_upload(params, tensor);
             }break;  
+        case MYML_OP_EXPERT_UPLOAD_END:
+            {
+                myml_compute_forward_expert_upload_end(params, tensor);
+            }break;
         case MYML_OP_EXPERT_OFFLOAD:
             {
                 myml_compute_forward_expert_offload(params, tensor);
+            }break;
+        case MYML_OP_LAYERS_UPLOAD:
+            {
+                myml_compute_forward_layers_upload(params, tensor);
+            }break;
+        case MYML_OP_LAYERS_UPLOAD_END:
+            {
+                myml_compute_forward_layers_upload_end(params, tensor);
+            }break;
+        case MYML_OP_LAYERS_FREE:
+            {
+                myml_compute_forward_layers_free(params, tensor);
             }break;
         case GGML_OP_COUNT:
             {
@@ -2369,6 +2388,10 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
             } break;
         case MYML_OP_EXPERT_UPLOAD:
         case MYML_OP_EXPERT_OFFLOAD:
+        case MYML_OP_LAYERS_UPLOAD:
+        case MYML_OP_LAYERS_UPLOAD_END:
+        case MYML_OP_EXPERT_UPLOAD_END:
+        case MYML_OP_LAYERS_FREE:
             {
                 n_tasks = 1; // Single-threaded I/O
             }break;
@@ -2866,7 +2889,7 @@ uint64_t my_get_accumulated_count(void) {
 //     return atomic_load_explicit(&load_count, memory_order_relaxed);
 // }
 
-
+static int j_decode = 0;
 static thread_ret_t ggml_graph_compute_thread(void * data) {
     struct ggml_compute_state * state = (struct ggml_compute_state *) data;
     struct ggml_threadpool    * tp    = state->threadpool;
@@ -2885,7 +2908,20 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
     };
 
     uint64_t t_start,t_end;
+    if(state->ith == 0) {
+        if(j_decode==1)
+        {
+            run_states.IS_DECODE = 1;
+        }
+        else {
+            run_states.IS_DECODE = 0;
+            j_decode=1;//下一次调用该函数的时候就是decode阶段了
+        }
+    }
+    ggml_barrier(state->threadpool);
+    // printf("thread %d: running state:%d\n", state->ith, run_states.IS_DECODE);
     t_start = ggml_time_us();UNUSED(t_start);
+
     for (int node_n = 0; node_n < cgraph->n_nodes && atomic_load_explicit(&tp->abort, memory_order_relaxed) != node_n; node_n++) {
         struct ggml_tensor * node = cgraph->nodes[node_n];
         char * name = ggml_get_name(node);
@@ -2909,7 +2945,7 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
             if(my_get_accumulated_count()<2) {
               ;  
             } 
-            else
+            else//第二次的时候（即decode）进入
             {
                 t_start = ggml_time_us();UNUSED(t_start);
             }
@@ -2935,10 +2971,10 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
     }
     ggml_barrier(state->threadpool);
     t_end = ggml_time_us();UNUSED(t_end);
-    if(state->ith == 0) {
-        //lxm:输出累积时间和计数
-        printf("\nthread %d: finished processing %d nodes in %.4f ms\n", state->ith, cgraph->n_nodes, (unsigned long long)(t_end - t_start)/1000.0);
-    }
+    // if(state->ith == 0) {
+    //     //lxm:输出累积时间和计数
+    //     printf("\nthread %d: finished processing %d nodes in %.4f ms\n", state->ith, cgraph->n_nodes, (unsigned long long)(t_end - t_start)/1000.0);
+    // }
 
     return 0;
 }

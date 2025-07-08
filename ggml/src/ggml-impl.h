@@ -107,6 +107,21 @@ GGML_API void ggml_log_callback_default(enum ggml_log_level level, const char * 
 #define GGML_PRINT_DEBUG_10(...)
 #endif
 
+#ifndef GLOBAL_DPARAMS
+#define GLOBAL_DPARAMS
+
+
+struct RUN_STATE
+{
+    int IS_DECODE; // Flag to indicate if we are in decode phase
+};
+
+extern struct RUN_STATE run_states; // Global variable to hold the run state
+
+
+
+#endif //run_state
+
 // tensor params
 
 static void ggml_set_op_params(struct ggml_tensor * tensor, const void * params, size_t params_size) {
@@ -600,3 +615,4 @@ GGML_API size_t gguf_type_size(enum gguf_type type);
 GGML_API struct gguf_context * gguf_init_from_file_impl(FILE * file, struct gguf_init_params params);
 GGML_API void gguf_write_to_buf(const struct gguf_context * ctx, std::vector<int8_t> & buf, bool only_meta);
 #endif // __cplusplus
+

@@ -171,6 +171,15 @@ struct llama_model_loader {
         void * progress_callback_user_data
     );
 
+    bool my2_load_all_data(
+        struct ggml_context * ctx,
+        llama_buf_map & bufs,
+        llama_mlocks * lmlocks,
+        llama_progress_callback progress_callback,
+        void * progress_callback_user_data,
+        int load_layers
+    );
+
     std::string ftype_name() const;
 
     void print_info() const;

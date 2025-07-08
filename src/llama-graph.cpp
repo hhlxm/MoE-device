@@ -687,6 +687,7 @@ ggml_tensor * llm_graph_context::build_ffn(
     return cur;
 }
 
+//lxm: next layer prediction
 ggml_tensor * llm_graph_context::my_build_moe_ffn(
          ggml_tensor * cur,
          ggml_tensor * gate_inp,
@@ -816,9 +817,11 @@ ggml_tensor * llm_graph_context::my_build_moe_ffn(
     }
 
     //lxm:加载需要的层
-    ggml_build_forward_expand(gf, mygf_expert_upload(ctx0, gate_exps, up_exps, down_exps, selected_experts, il, 1));//TODO:1.run 2.baseline on device 3.optimize
+    ggml_build_forward_expand(gf, mygf_expert_upload_begin(ctx0, gate_exps, up_exps, down_exps, selected_experts, il));//TODO:1.run 2.baseline on device 3.optimize
 
     //on demand加载完之后，开始加载预测的IO和计算异步进行async
+    ggml_build_forward_expand(gf, mygf_expert_upload_end(ctx0,cur, il));//TODO:1.run 2.baseline on device 3.optimize
+
 
     ggml_tensor * up = build_lora_mm_id(up_exps, cur, selected_experts); // [n_ff, n_expert_used, n_tokens]
     cb(up, "ffn_moe_up", il);
@@ -883,6 +886,7 @@ ggml_tensor * llm_graph_context::my_build_moe_ffn(
 }
 
 
+//在计算前开启io线程load专家
 ggml_tensor * llm_graph_context::build_moe_ffn(
          ggml_tensor * cur,
          ggml_tensor * gate_inp,
@@ -940,9 +944,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     cb(selected_experts->src[0], "ffn_moe_argsort", il);
     cb(selected_experts, "ffn_moe_topk", il);
 
-    //lxm:加载需要的层
-    ggml_build_forward_expand(gf, mygf_expert_upload(ctx0, gate_exps, up_exps, down_exps, selected_experts, il, 1));//TODO:1.run 2.baseline on device 3.optimize
-
+   
     // Offload experts if memory limit exceeded
     // {
     //     ggml_build_forward_expand(gf, mygf_expert_offload(ctx0, gate_exps, up_exps, down_exps, 1, il, 1));
@@ -977,6 +979,13 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         cur = ggml_mul(ctx0, repeated, weights);
         cb(cur, "ffn_moe_weighted", il);
     }
+
+    //lxm:加载需要的层
+    ggml_build_forward_expand(gf, mygf_expert_upload_begin(ctx0, gate_exps, up_exps, down_exps, selected_experts, il));//TODO:1.run 2.baseline on device 3.optimize
+
+    //on demand加载完之后，开始加载预测的IO和计算异步进行async
+    ggml_build_forward_expand(gf, mygf_expert_upload_end(ctx0,cur, il));//TODO:1.run 2.baseline on device 3.optimize
+
 
     ggml_tensor * up = build_lora_mm_id(up_exps, cur, selected_experts); // [n_ff, n_expert_used, n_tokens]
     cb(up, "ffn_moe_up", il);

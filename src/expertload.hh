@@ -35,7 +35,6 @@ enum expert_weight {
 };
 
 struct ExpertIOContext {
-    uint8_t *        read_buf;    // 读缓冲区
     void *        dst;         // 目标缓冲区
     std::vector<int> expert_ids;  // 专家ID列表
     int              layer_id;    // 层ID
@@ -77,6 +76,7 @@ class expert_loader {
     std::atomic<uint64_t> g_load_cnt{ 0 };
     std::atomic<uint64_t> g_load_size{ 0 };
     std::atomic<uint64_t> g_load_time{ 0 };
+    std::atomic<uint64_t> g_load_layers_time{ 0 };
 
     // 每层专家数据的基础偏移量
     std::vector<std::vector<ExpertOffset>> offsets;
@@ -134,7 +134,6 @@ class expert_loader {
         this->buffer_size = 0;
         for (int i = 0; i < NUM_IO; i++) {
             auto * ctx    = new ExpertIOContext();
-            ctx->read_buf = nullptr;
             ctx_queue.push(ctx);
         }
 
@@ -187,7 +186,7 @@ class expert_loader {
 
         std::sort(expert_ids.begin(), expert_ids.end());
         expert_ids.erase(std::unique(expert_ids.begin(), expert_ids.end()), expert_ids.end());
-        auto start      = std::chrono::high_resolution_clock::now();
+        // auto start      = std::chrono::high_resolution_clock::now();
 
         // 处理连续的expert_ids组
         int p1   = 0;
@@ -222,14 +221,14 @@ class expert_loader {
 
             p1 = p2 + 1;
         }
-        // 等待所有IO完成
-        while (on_fly > 0) {
-            ok = ok && process_completion();
-        }
-        auto end = std::chrono::high_resolution_clock::now();
+        // // 等待所有IO完成
+        // while (on_fly > 0) {
+        //     ok = ok && process_completion();
+        // }
+        // auto end = std::chrono::high_resolution_clock::now();
 
-        auto during = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
-        g_load_time += during;
+        // auto during = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
+        // g_load_time += during;
         // auto temp =(unsigned long long)g_load_size.load();
         // printf("[Expert Loader] size:%llu time: %.6fms\n", temp, (unsigned long long)during/1000.0);
 
@@ -400,23 +399,32 @@ class expert_loader {
         }
 
         ExpertIOContext * ctx = static_cast<ExpertIOContext *>(io_uring_cqe_get_data(cqe));
-        if (cqe->res > 0) {
-            // 复制数据到目标缓冲区
-            // uint8_t * read_pos = ctx->read_buf;
-            // memcpy(ctx->dst, read_pos, expert_size * ctx->expert_ids.size());
-        } 
-        else if (cqe->res < 0) {
-            fprintf(stderr, "[Expert Loader] Read failed: %s (%d), offset=%zu size=%zu dst=%p\n",
-        strerror(-cqe->res), -cqe->res, ctx->n_size * ctx->expert_ids[0], ctx->n_size, ctx->dst);
-                return false;
-
+        if (cqe->res <= 0) {
+            // fprintf(stderr, "[Expert Loader] Read failed: %s %d \n", strerror(-cqe->res), cqe->res);
+                GGML_ABORT("[Expert Loader] Read failed: %s %d \n", strerror(-cqe->res), cqe->res);
         }
 
         io_uring_cqe_seen(&ring, cqe);
-        //free(ctx->read_buf);
         ctx_queue.push(ctx);
         on_fly--;
         return true;
+    }
+
+    void wait_upload_finish(int flag) {
+        auto start = std::chrono::high_resolution_clock::now();
+        while (on_fly > 0) {
+            process_completion();
+        }
+        auto end = std::chrono::high_resolution_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
+        if(flag == 0)
+        {
+            g_load_layers_time += duration;//prefill 异步加载
+        }
+        else if (flag == 1) {
+            g_load_time += duration;//expert加载
+        }
+        
     }
 };
 
