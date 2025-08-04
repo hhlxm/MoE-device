@@ -2903,10 +2903,10 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
             tp->ec    = GGML_STATUS_ABORTED;
         }
 
-        if(state->ith == 0&&strcmp(ggml_get_name(node),"ffn_inp-0")==0 ) {
+        if(state->ith == 0&&strcmp(ggml_get_name(node),"inp_embd")==0 ) {
             //start
             atomic_fetch_add(&s_accumulated_count, 1);
-            if(my_get_accumulated_count()<2) {
+            if(my_get_accumulated_count()<=2) {
               ;  
             } 
             else
@@ -2916,7 +2916,7 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
         }
         else if( state->ith == 0&&strcmp(ggml_get_name(node),"l_out-15")==0 ) {
             //end
-            if(my_get_accumulated_count()<2) {
+            if(my_get_accumulated_count()<=2) {
               ;  
             } 
             else
