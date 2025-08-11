@@ -107,6 +107,22 @@ GGML_API void ggml_log_callback_default(enum ggml_log_level level, const char * 
 #define GGML_PRINT_DEBUG_10(...)
 #endif
 
+#ifndef GLOBAL_DPARAMS
+#define GLOBAL_DPARAMS
+
+
+struct RUN_STATE
+{
+    int IS_DECODE; // Flag to indicate if we are in decode phase
+};
+
+extern struct RUN_STATE run_states; // Global variable to hold the run state
+
+
+#endif //run_state
+
+
+
 // tensor params
 
 static void ggml_set_op_params(struct ggml_tensor * tensor, const void * params, size_t params_size) {

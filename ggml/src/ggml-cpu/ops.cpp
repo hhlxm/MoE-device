@@ -1,5 +1,5 @@
 #include "ops.h"
-
+#include "../ggml-impl.h"
 #include "ggml-cpu.h"
 #include "ggml-impl.h"
 #include "binary-ops.h"
@@ -8917,7 +8917,6 @@ void myml_compute_forward_expert_offload(const struct ggml_compute_params * para
     myml_expert_offload(params, dst);
 }
 
-static int judge_decode = 0;
 void myml_expert_upload(const struct ggml_compute_params * params, struct ggml_tensor * dst) {
     auto start = ggml_time_us();
     auto & loader = expert_loader::get_instance();
@@ -8929,6 +8928,12 @@ void myml_expert_upload(const struct ggml_compute_params * params, struct ggml_t
     struct ggml_tensor * up_exps = dst->src[1];
     struct ggml_tensor * down_exps = dst->src[2];
     struct ggml_tensor * selected_experts = dst->src[3];
+
+    if(!run_states.IS_DECODE)
+    {
+        return;
+    }
+
     int n_expert_used = selected_experts->ne[0];
     int n_tokens = selected_experts->ne[1];
     int total_num = n_expert_used * n_tokens;
@@ -8937,11 +8942,6 @@ void myml_expert_upload(const struct ggml_compute_params * params, struct ggml_t
 
     std::vector<int> selected_experts_vector(selected_experts_data, selected_experts_data + total_num);
 
-    if(judge_decode==0&&il==1&&selected_experts->ne[1] == 1)
-    {
-        judge_decode=1;//decode start
-    }
-    
     std::vector<void *> dsts = {
 
         gate_exps->data ,
@@ -8950,7 +8950,7 @@ void myml_expert_upload(const struct ggml_compute_params * params, struct ggml_t
 
     };
 
-    if(judge_decode==1)
+    if(run_states.IS_DECODE)
     {
         bool ok = loader.read_experts(il, selected_experts_vector, dsts);
         GGML_ASSERT(ok);
@@ -8962,6 +8962,7 @@ void myml_expert_upload(const struct ggml_compute_params * params, struct ggml_t
     // GGML_LOG_INFO("Layer %d Expert upload took %.3f ms\n",il, duration / 1000.0);
 }
 
+// TODO: no useage
 static int done = 1;
 void myml_expert_offload(const struct ggml_compute_params * params, struct ggml_tensor * dst) {
     auto start = ggml_time_us();
@@ -8972,19 +8973,16 @@ void myml_expert_offload(const struct ggml_compute_params * params, struct ggml_
     std::vector<int> expert_ids(1,dst->op_params[2]);
     if(done<27)
     {
-        {  // —— 开始 dump tensor 到文件的示例 ——  
-            // 假设我们要把 gate/up/down 三路都写到不同的二进制文件中  
+        { 
             auto dump = [&](int m, ggml_tensor * t){
-                // 构造文件名  
                 std::string fn = "/home/wangtuowei/lxm/llama.cpp/my_expert/"
-                            + std::to_string(il) + "_"   // 层号  
-                            + std::to_string(m) + ".bin";// 类型号  
+                            + std::to_string(il) + "_"   
+                            + std::to_string(m) + ".bin";
                 std::ofstream ofs(fn, std::ios::binary);
                 if (!ofs) {
                     fprintf(stderr, "[DBG] 无法打开文件 %s\n", fn.c_str());
                     return;
                 }
-                // 写出整个 tensor 数据区  
                 size_t n = ggml_nbytes(t);
                 ofs.write(reinterpret_cast<char*>(t->data), n);
                 fprintf(stderr, "[DBG] 已写入 %s, %zu 字节\n", fn.c_str(), n);
@@ -8994,26 +8992,8 @@ void myml_expert_offload(const struct ggml_compute_params * params, struct ggml_
             dump(1, dst->src[1]);  // up  
             dump(2, dst->src[2]);  // down  
         }
-        done++; // 只执行一次
+        done++; 
     }
-    // expert_ids.emplace_back(dst->op_params[2],); // Layer index and expert type
-
-    // int n_ids = dst->op_params[2];
-    // for (int i = 0; i < n_ids; i++) {
-    //     expert_ids[i] = dst->op_params[3 + i];
-    // }
-
-    // struct ggml_tensor * gate_exps = dst->src[0];
-    // struct ggml_tensor * up_exps = dst->src[1];
-    // struct ggml_tensor * down_exps = dst->src[2];
-    // std::vector<uint8_t *> srcs = {
-    //      (uint8_t *)gate_exps->data ,
-    //      (uint8_t *)up_exps->data   ,
-    //      (uint8_t *)down_exps->data 
-    // };
-
-    // bool ok = loader.write_experts(il, expert_ids, srcs);
-    // GGML_ASSERT(ok);
 
     auto end = ggml_time_us();
     auto duration = (end - start);

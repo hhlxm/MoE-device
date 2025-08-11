@@ -9,7 +9,7 @@
 #include <cstring>
 #include <stdexcept>
 #include <cinttypes>
-
+#include "../ggml/src/ggml-impl.h"
 //
 // llama_context
 //
@@ -888,7 +888,6 @@ int parse_blk_ffn_exps(const char *str) {
     return 1; // 匹配成功
 }
 
-
 int llama_context::decode(llama_batch & inp_batch) {
     if (!memory) {
         LLAMA_LOG_WARN("%s: cannot decode batches with this context (use llama_encode() instead)\n", __func__);
@@ -967,7 +966,7 @@ int llama_context::decode(llama_batch & inp_batch) {
 
     // reserve output buffer
     if (output_reserve(n_outputs_all) < n_outputs_all) {
-        LLAMA_LOG_ERROR("%s: could not reserve space for batch with %" PRId64 " outputs\n", __func__, n_outputs_all);
+        LLAMA_LOG_ERROR("%s: could not reserve space for batch with %" PRId64 " outputs\n", __func__, (int64_t)n_outputs_all);
         return -2;
     };
 
@@ -995,22 +994,16 @@ int llama_context::decode(llama_batch & inp_batch) {
             // needs to happen before the graph is built
             n_outputs = n_outputs_new;
         }
-        {  //decode stage rebuild buffer
-            // 找到expert的ctx，重新分配相同类型的buft的buffer，然后释放buffer
-            // 再看是否有其他的非expert在ctx中，如果有的话，还得在buffer中load对应的非expert的tensor
-            // struct ggml_tensor * first = nullptr;
-            // ggml_backend_buffer_t arch_buf;
-            // ggml_backend_buffer_t buf;
-            if(j_decode==0 && ubatch.n_tokens==1)
+        {  
+            if(j_decode == 0 && ubatch.n_tokens==1)
             {
-                j_decode=1;
-
+                j_decode = 1;
                 for (const auto& ctx_ptr : model.get_pimpl_ctx()) {
                     auto* ctx = ctx_ptr.get();
-                    struct ggml_tensor* first = ggml_get_first_tensor(ctx);
+                    auto first = ggml_get_first_tensor(ctx);
 
                     int num_exp = 0, num_oth = 0;
-                    for (struct ggml_tensor* t = first; t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+                    for (auto t = first; t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
                         if (parse_blk_ffn_exps(ggml_get_name(t)))
                             ++num_exp;
                         else
@@ -1025,7 +1018,7 @@ int llama_context::decode(llama_batch & inp_batch) {
                     }
 
                     // 分配 expert buffer
-                    auto* buf = my_ggml_backend_alloc_ctx_tensors_from_buft(
+                    auto * buf = my_ggml_backend_alloc_ctx_tensors_from_buft(
                         ctx, first, model.hparams.n_expert_used, model.hparams.n_expert);
                     ggml_backend_buffer_set_usage(buf, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
                     model.reset_pimpl_bufs(buf);

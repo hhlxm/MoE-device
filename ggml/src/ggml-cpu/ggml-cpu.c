@@ -1,6 +1,6 @@
 #define _CRT_SECURE_NO_DEPRECATE // Disables "unsafe" warnings on Windows
 #define _USE_MATH_DEFINES // For M_PI on MSVC
-
+#include "../ggml-impl.h"
 #include "ggml-backend-impl.h"
 #include "ggml-backend.h"
 #include "ggml-cpu-traits.h"
@@ -194,7 +194,7 @@ typedef pthread_t ggml_thread_t;
 #include <mach/mach.h>
 #include <TargetConditionals.h>
 #endif
-
+struct RUN_STATE run_states;
 static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
     [GGML_TYPE_F32] = {
         .vec_dot                  = (ggml_vec_dot_t) ggml_vec_dot_f32,
@@ -1527,7 +1527,6 @@ static void * incr_ptr_aligned(void ** p, size_t size, size_t align) {
     *p = (void *) ((char *) ptr + size);
     return ptr;
 }
-static int is_decode = 0;
 static void ggml_compute_forward_mul_mat_id(
         const struct ggml_compute_params * params,
               struct ggml_tensor * dst) {
@@ -1651,7 +1650,7 @@ static void ggml_compute_forward_mul_mat_id(
         }
         //得到专家权重
         const char * src0_cur = (const char *) src0->data + cur_a * nb02;//lxm：挑出专家的权重：基址+专家号*偏移大小
-        if(ids->ne[1] ==1&&is_decode==2)
+        if(ids->ne[1] ==1&&run_states.IS_DECODE)
         {
             src0_cur = (const char *) src0->data + (idx++) * GGML_PAD(nb02,LXM_ALIGNMENT);//lxm：挑出专家的权重：基址+第几个专家*偏移大小
         }
@@ -1711,10 +1710,6 @@ static void ggml_compute_forward_mul_mat_id(
 
             current_chunk = atomic_fetch_add_explicit(current_chunk_ctr, 1, memory_order_relaxed);
         }
-    }
-    if(ids->ne[1] ==1&&is_decode<2)//最后一层
-    {
-        is_decode++;
     }
 }
 
@@ -2866,7 +2861,7 @@ uint64_t my_get_accumulated_count(void) {
 //     return atomic_load_explicit(&load_count, memory_order_relaxed);
 // }
 
-
+static int decode_flag = 0;
 static thread_ret_t ggml_graph_compute_thread(void * data) {
     struct ggml_compute_state * state = (struct ggml_compute_state *) data;
     struct ggml_threadpool    * tp    = state->threadpool;
@@ -2885,6 +2880,17 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
     };
 
     uint64_t t_start,t_end;
+    if(state->ith == 0) {
+        if(decode_flag==2)
+        {
+            run_states.IS_DECODE = 1;
+        }
+        else if(decode_flag==0) {
+            run_states.IS_DECODE = 0;
+        }
+        decode_flag++;
+    }
+    ggml_barrier(state->threadpool);
 
     for (int node_n = 0; node_n < cgraph->n_nodes && atomic_load_explicit(&tp->abort, memory_order_relaxed) != node_n; node_n++) {
         struct ggml_tensor * node = cgraph->nodes[node_n];
@@ -2906,20 +2912,14 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
         if(state->ith == 0&&strcmp(ggml_get_name(node),"inp_embd")==0 ) {
             //start
             atomic_fetch_add(&s_accumulated_count, 1);
-            if(my_get_accumulated_count()<=2) {
-              ;  
-            } 
-            else
+            if(run_states.IS_DECODE) //decode stage
             {
                 t_start = ggml_time_us();UNUSED(t_start);
             }
         }
         else if( state->ith == 0&&strcmp(ggml_get_name(node),"l_out-15")==0 ) {
             //end
-            if(my_get_accumulated_count()<=2) {
-              ;  
-            } 
-            else
+            if(run_states.IS_DECODE) //decode stage
             {
                 t_end = ggml_time_us();UNUSED(t_end);
                 atomic_fetch_add(&s_accumulated_time, (t_end - t_start));
