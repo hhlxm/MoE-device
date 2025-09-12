@@ -140,12 +140,12 @@ class expert_loader {
 
         this->initialized = true;
 
-        std::string save_temp = "/home/wangtuowei/lxm/temp/moe_expert_" + name + ".bin";
+        std::string save_temp = "../temp/moe_expert_" + name + ".bin";
         strncpy(save_path, save_temp.c_str(), sizeof(save_path) - 1);
         save_path[sizeof(save_path) - 1] = '\0'; // 确保字符串以null结尾
 
         
-        std::string save_log ="/home/wangtuowei/lxm/temp/moe_expert_" + name + "_log.log";
+        std::string save_log ="../temp/moe_expert_" + name + "_log.log";
         strncpy(log_path, save_log.c_str(), sizeof(log_path) - 1);
         log_path[sizeof(log_path) - 1] = '\0'; // 确保字符串以null结尾
 
