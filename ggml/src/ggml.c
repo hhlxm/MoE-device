@@ -6550,30 +6550,35 @@ bool ggml_threadpool_params_match(const struct ggml_threadpool_params * p0, cons
 }
 
 
-struct ggml_tensor * mygf_expert_upload(
+struct ggml_tensor * mygf_expert_upload_begin(
     struct ggml_context * ctx,
     struct ggml_tensor * gate_exps,
     struct ggml_tensor * up_exps,
     struct ggml_tensor * down_exps,
-    struct ggml_tensor * selected_experts,//TODO
-    int il,
-    int m) {
-    struct ggml_tensor * result;
-    switch (m) {
-        case 0: result = ggml_view_tensor(ctx, gate_exps); break;
-        case 1: result = ggml_view_tensor(ctx, up_exps); break;
-        case 2: result = ggml_view_tensor(ctx, down_exps); break;
-        default: GGML_ASSERT(false);
-    }
+    struct ggml_tensor * selected_experts,
+    int il) {
+
+    struct ggml_tensor * result = ggml_view_tensor(ctx, gate_exps);
     ggml_format_name(result, "expert_upload-%d", il);
 
-    result->op = MYML_OP_EXPERT_UPLOAD;
+    result->op = MYML_OP_EXPERT_UPLOAD_BEGIN;
     result->op_params[0] = il;
-    result->op_params[1] = m;
     result->src[0] = gate_exps;
     result->src[1] = up_exps;
     result->src[2] = down_exps;
     result->src[3] = selected_experts; // Assuming selected_experts is a tensor containing expert IDs
+
+    return result;
+}
+
+struct ggml_tensor * mygf_expert_upload_end(
+        struct ggml_context * ctx,
+        struct ggml_tensor * tensor,
+    int il)  // m is the expert index
+{
+    struct ggml_tensor * result = ggml_view_tensor(ctx, tensor);
+    ggml_format_name(result, "layer_%d_expert_upload_end", il);
+    result->op = MYML_OP_EXPERT_UPLOAD_END;
 
     return result;
 }

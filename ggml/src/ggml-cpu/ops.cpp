@@ -8907,22 +8907,27 @@ void ggml_compute_forward_opt_step_adamw(
 }
 
 //lxm: function define
-void myml_compute_forward_expert_upload(const struct ggml_compute_params * params, struct ggml_tensor * dst) {
+void myml_compute_forward_expert_upload_begin(const struct ggml_compute_params * params, struct ggml_tensor * dst) {
     if (params->ith != 0) return; // Main thread only，单线程去读写
-    myml_expert_upload(params, dst);
+    myml_expert_upload_begin(params, dst);
+    return;
+}
+
+void myml_compute_forward_expert_upload_end(const struct ggml_compute_params * params, struct ggml_tensor * dst){
+    if (params->ith != 0) return; // Main thread only，单线程去读写
+    myml_expert_upload_end(params, dst);
+    return;
 }
 
 void myml_compute_forward_expert_offload(const struct ggml_compute_params * params, struct ggml_tensor * dst) {
     if (params->ith != 0) return; // Main thread only，单线程去读写
     myml_expert_offload(params, dst);
+    return;
 }
 
-void myml_expert_upload(const struct ggml_compute_params * params, struct ggml_tensor * dst) {
-    auto start = ggml_time_us();
+void myml_expert_upload_begin(const struct ggml_compute_params * params, struct ggml_tensor * dst) {
     auto & loader = expert_loader::get_instance();
-
     int il = dst->op_params[0]; // Layer index
-    int m = dst->op_params[1];  // Expert type (0=gate, 1=up, 2=down)
 
     struct ggml_tensor * gate_exps = dst->src[0];
     struct ggml_tensor * up_exps = dst->src[1];
@@ -8943,11 +8948,9 @@ void myml_expert_upload(const struct ggml_compute_params * params, struct ggml_t
     std::vector<int> selected_experts_vector(selected_experts_data, selected_experts_data + total_num);
 
     std::vector<void *> dsts = {
-
         gate_exps->data ,
         up_exps->data   ,
         down_exps->data 
-
     };
 
     if(run_states.IS_DECODE)
@@ -8955,21 +8958,22 @@ void myml_expert_upload(const struct ggml_compute_params * params, struct ggml_t
         bool ok = loader.read_experts(il, selected_experts_vector, dsts);
         GGML_ASSERT(ok);
     }
+}
 
-
-    auto end = ggml_time_us();
-    auto duration = (end - start);
-    // GGML_LOG_INFO("Layer %d Expert upload took %.3f ms\n",il, duration / 1000.0);
+void myml_expert_upload_end(const struct ggml_compute_params * params, struct ggml_tensor * dst) {
+    if(run_states.IS_DECODE)
+    {
+        auto & loader = expert_loader::get_instance();
+        loader.wait_upload_finish(1);//-------------WAIT---------------//
+    }
 }
 
 // TODO: no useage
 static int done = 1;
 void myml_expert_offload(const struct ggml_compute_params * params, struct ggml_tensor * dst) {
     auto start = ggml_time_us();
-    auto & loader = expert_loader::get_instance();
 
     int il = dst->op_params[0];
-    int m = dst->op_params[1];
     std::vector<int> expert_ids(1,dst->op_params[2]);
     if(done<27)
     {

@@ -398,7 +398,7 @@ static bool ggml_backend_cpu_device_supports_op(ggml_backend_dev_t dev, const st
     }
 
     // lxm: swap op
-    if  (op->op == MYML_OP_EXPERT_UPLOAD || op->op == MYML_OP_EXPERT_OFFLOAD) {
+    if  (op->op == MYML_OP_EXPERT_UPLOAD_BEGIN || op->op == MYML_OP_EXPERT_UPLOAD_END || op->op == MYML_OP_EXPERT_OFFLOAD) {
         return true;
     }
 

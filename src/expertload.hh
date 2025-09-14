@@ -17,15 +17,14 @@
 #include <regex>
 #include <vector>
 
+#include "llama-arch.h"
 #include "llama-hparams.h"
 #include "llama-impl.h"
 #include "llama-mmap.h"
-#include "llama-arch.h"
 
-inline bool is_file_empty(const std::string& filename) {
+inline bool is_file_empty(const std::string & filename) {
     return std::filesystem::exists(filename) && std::filesystem::file_size(filename) == 0;
 }
-
 
 enum expert_weight {
     EXPERT_NONE = -1,  // 未定义
@@ -35,8 +34,7 @@ enum expert_weight {
 };
 
 struct ExpertIOContext {
-    uint8_t *        read_buf;    // 读缓冲区
-    void *        dst;         // 目标缓冲区
+    void *           dst;         // 目标缓冲区
     std::vector<int> expert_ids;  // 专家ID列表
     int              layer_id;    // 层ID
     int              m;           // 专家类型（0: gate, 1: up, 2: down）
@@ -50,24 +48,24 @@ struct ExpertOffset {
 
 class expert_loader {
   private:
-    const int                     NUM_IO = 512;                                   // IO队列深度
-    struct io_uring               ring;                                           // io_uring实例
+    const int                     NUM_IO = 512;                            // IO队列深度
+    struct io_uring               ring;                                    // io_uring实例
     std::queue<ExpertIOContext *> ctx_queue;
-    size_t                        buffer_size = 0;                                // 读缓冲区大小
-    int                           on_fly      = 0;                                // 正在进行的IO数量
-    bool                          initialized;                                    // 是否已初始化
-    char                          save_path[128] = "/tmp/expert.bin";  // 保存文件路径
-    char                          log_path[128] = "/tmp/expert_log.log";  // 保存文件路径
-    char                          padding[4096] ;
+    size_t                        buffer_size = 0;                         // 读缓冲区大小
+    int                           on_fly      = 0;                         // 正在进行的IO数量
+    bool                          initialized;                             // 是否已初始化
+    char                          save_path[128] = "/temp/expert.bin";      // 保存文件路径
+    char                          log_path[128]  = "/temp/expert_log.log";  // 保存文件路径
+    char                          padding[4096];
 
     // 文件相关
-    std::vector<int> files;               // 文件列表
-    size_t           alignment;           // 对齐要求
-    bool f_write = false;
+    std::vector<int> files;      // 文件列表
+    size_t           alignment;  // 对齐要求
+    bool             f_write = false;
 
-    int    save_fd          = -1;         // 保存文件的文件描述符
-    size_t save_offset      = 0;          // 保存文件的当前偏移量
-    bool   save_initialized = false;      // 是否已初始化保存文件
+    int    save_fd          = -1;     // 保存文件的文件描述符
+    size_t save_offset      = 0;      // 保存文件的当前偏移量
+    bool   save_initialized = false;  // 是否已初始化保存文件
 
     // 模型参数
     int num_layers;   // 层数
@@ -123,7 +121,7 @@ class expert_loader {
     bool init(const llama_hparams & hparams, const std::string & name) {
         this->num_layers  = hparams.n_layer;
         this->num_experts = hparams.n_expert;
-        this->alignment   = 4096;//TENSOR_ALIGNMENT
+        this->alignment   = 4096;  //TENSOR_ALIGNMENT
 
         memset(padding, 0, 4096);  // 填充为0
 
@@ -134,7 +132,6 @@ class expert_loader {
         this->buffer_size = 0;
         for (int i = 0; i < NUM_IO; i++) {
             auto * ctx    = new ExpertIOContext();
-            ctx->read_buf = nullptr;
             ctx_queue.push(ctx);
         }
 
@@ -142,20 +139,18 @@ class expert_loader {
 
         std::string save_temp = "../temp/moe_expert_" + name + ".bin";
         strncpy(save_path, save_temp.c_str(), sizeof(save_path) - 1);
-        save_path[sizeof(save_path) - 1] = '\0'; // 确保字符串以null结尾
+        save_path[sizeof(save_path) - 1] = '\0';  // 确保字符串以null结尾
 
-        
-        std::string save_log ="../temp/moe_expert_" + name + "_log.log";
+        std::string save_log = "../temp/moe_expert_" + name + "_log.log";
         strncpy(log_path, save_log.c_str(), sizeof(log_path) - 1);
-        log_path[sizeof(log_path) - 1] = '\0'; // 确保字符串以null结尾
+        log_path[sizeof(log_path) - 1] = '\0';  // 确保字符串以null结尾
 
-        
         // this->save_fd = open(save_path, O_RDWR | O_CREAT | O_DIRECT, 0666);
         // if (save_fd <= 0) {
         //     std::cerr << "open error: " << save_path << std::endl;
         //     return false;
         // }
-      
+
         return true;
     }
 
@@ -170,16 +165,16 @@ class expert_loader {
 
     // 读取单层单个专家
     bool read_expert(int layer_id, int expert_id, void * dst) {
-        std::vector<int>       expert_ids = { expert_id };
+        std::vector<int>    expert_ids = { expert_id };
         std::vector<void *> dsts       = { dst };
         return read_experts(layer_id, expert_ids, dsts);
     }
 
     // 读取单层多个专家
     bool read_experts(int layer_id, std::vector<int> & expert_ids, const std::vector<void *> & dsts) {
-        this->save_fd = open(save_path, O_RDONLY  | O_DIRECT, 0666);
+        this->save_fd = open(save_path, O_RDONLY | O_DIRECT, 0666);
         if (save_fd < 0) {
-            fprintf(stderr, "[Expert Loader] Save file not opened %d\n",save_fd);
+            fprintf(stderr, "[Expert Loader] Save file not opened %d\n", save_fd);
             return false;
         }
         bool ok         = true;
@@ -187,7 +182,6 @@ class expert_loader {
 
         std::sort(expert_ids.begin(), expert_ids.end());
         expert_ids.erase(std::unique(expert_ids.begin(), expert_ids.end()), expert_ids.end());
-        auto start      = std::chrono::high_resolution_clock::now();
 
         // 处理连续的expert_ids组
         int p1   = 0;
@@ -215,23 +209,13 @@ class expert_loader {
                 batch_info.push_back(std::make_pair(idx++, it));
             }
 
-            for (int i = 0; i < (int)dsts.size(); i++) {
+            for (int i = 0; i < (int) dsts.size(); i++) {
                 ok = ok && submit_read_request(layer_id, batch_info, dsts[i], i);
                 submit_num++;
             }
 
             p1 = p2 + 1;
         }
-        // 等待所有IO完成
-        while (on_fly > 0) {
-            ok = ok && process_completion();
-        }
-        auto end = std::chrono::high_resolution_clock::now();
-
-        auto during = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
-        g_load_time += during;
-        // auto temp =(unsigned long long)g_load_size.load();
-        // printf("[Expert Loader] size:%llu time: %.6fms\n", temp, (unsigned long long)during/1000.0);
 
         return ok;
     }
@@ -248,16 +232,15 @@ class expert_loader {
 
     bool is_save_initialized() const { return save_initialized; }
 
-
     bool write_experts(int layer_id, ggml_tensor * tensor, int m) {
-        this->save_fd = open(save_path, O_WRONLY | O_CREAT , 0666);
+        this->save_fd = open(save_path, O_WRONLY | O_CREAT, 0666);
         if (!is_initialized()) {
             fprintf(stderr, "[Expert Loader] Not initialized\n");
             return false;
         }
 
         if (save_fd < 0) {
-            fprintf(stderr, "[Expert Loader] Save file not opened %d\n",save_fd);
+            fprintf(stderr, "[Expert Loader] Save file not opened %d\n", save_fd);
             return false;
         }
 
@@ -266,9 +249,7 @@ class expert_loader {
             return false;
         }
 
-
-        if(!is_file_empty(save_path)&&!f_write)
-        {
+        if (!is_file_empty(save_path) && !f_write) {
             std::ifstream log_file(log_path);
             std::string   line;
             std::regex    pattern(R"(Write layer (\d+) expert (\d+),.*aligned size (\d+) offset (\d+))");
@@ -291,45 +272,43 @@ class expert_loader {
                 }
             }
             return true;
-        }
-        else
-        {
+        } else {
             FILE * log_file = fopen(log_path, "a");
-            if(log_file == nullptr) {
+            if (log_file == nullptr) {
                 fprintf(stderr, "[Expert Loader] Failed to open log file: %s\n", strerror(errno));
                 return false;
             }
-            f_write=true;
+            f_write = true;
 
             // 获取base 和 pad
-            const char * base_ptr = (char *)tensor->data;
-            size_t n_size = ggml_nbytes(tensor);    //tensor的原始大小
-            size_t per_size = n_size / tensor->ne[2];  // 每个专家的大小
-            size_t per_aligned_size =GGML_PAD(per_size,alignment);//每个专家的对齐大小
-            size_t pad_size = per_aligned_size - per_size;  // 填充大小
+            const char * base_ptr         = (char *) tensor->data;
+            size_t       n_size           = ggml_nbytes(tensor);            //tensor的原始大小
+            size_t       per_size         = n_size / tensor->ne[2];         // 每个专家的大小
+            size_t       per_aligned_size = GGML_PAD(per_size, alignment);  //每个专家的对齐大小
+            size_t       pad_size         = per_aligned_size - per_size;    // 填充大小
 
-            fprintf(log_file,"[Expert Loader] Write layer %d expert %d, tensor size %zu, aligned size %zu offset %zu\n", layer_id, m, n_size, per_aligned_size * tensor->ne[2], save_offset);
+            fprintf(log_file,
+                    "[Expert Loader] Write layer %d expert %d, tensor size %zu, aligned size %zu offset %zu\n",
+                    layer_id, m, n_size, per_aligned_size * tensor->ne[2], save_offset);
             GGML_ASSERT(save_offset % alignment == 0);  // 确保对齐
-            offsets[layer_id][m] = ExpertOffset{save_offset, per_aligned_size};
+            offsets[layer_id][m] = ExpertOffset{ save_offset, per_aligned_size };
 
             // 每个expert pad写
-            for(int i=0;i<tensor->ne[2];i++)
-            {
-                ssize_t bytes_written = pwrite(save_fd, base_ptr+per_size*i, per_size, save_offset);
+            for (int i = 0; i < tensor->ne[2]; i++) {
+                ssize_t bytes_written = pwrite(save_fd, base_ptr + per_size * i, per_size, save_offset);
                 if (bytes_written < 0) {
-                        fprintf(stderr, "[Expert Loader] Failed to write to save file: %s\n", strerror(errno));
-                        return false;
-                    }
-                GGML_ASSERT(bytes_written == (ssize_t)per_size);
+                    fprintf(stderr, "[Expert Loader] Failed to write to save file: %s\n", strerror(errno));
+                    return false;
+                }
+                GGML_ASSERT(bytes_written == (ssize_t) per_size);
                 save_offset += bytes_written;
-                if(pad_size != 0)
-                {
+                if (pad_size != 0) {
                     ssize_t bytes_written = pwrite(save_fd, padding, pad_size, save_offset);
                     if (bytes_written < 0) {
                         fprintf(stderr, "[Expert Loader] Failed to write to save file: %s\n", strerror(errno));
                         return false;
                     }
-                    GGML_ASSERT(bytes_written == (ssize_t)pad_size);
+                    GGML_ASSERT(bytes_written == (ssize_t) pad_size);
                     save_offset += bytes_written;
                 }
                 GGML_ASSERT(save_offset % alignment == 0);  // 确保对齐
@@ -345,19 +324,18 @@ class expert_loader {
         return { g_load_cnt.load(), g_load_size.load(), g_load_time.load() };
     }
 
-    bool submit_read_request(int layer_id, const std::vector<std::pair<int, int>> & batch_info,  void * dst, int m) {
+    bool submit_read_request(int layer_id, const std::vector<std::pair<int, int>> & batch_info, void * dst, int m) {
         struct ExpertOffset & offset      = offsets[layer_id][m];
-        size_t                read_size   = offset.n_size * batch_info.size();//对齐的大小
+        size_t                read_size   = offset.n_size * batch_info.size();  //对齐的大小
         size_t                read_offset = offset.offs + offset.n_size * batch_info[0].second;
-        void *              dst_ptr     = (char *)dst + offset.n_size * batch_info[0].first;
-        GGML_ASSERT(((uintptr_t)dst) % alignment == 0);           // dst 必须对齐
-        GGML_ASSERT(((uintptr_t)dst_ptr) % alignment == 0);       // dst_ptr 必须对齐
-        GGML_ASSERT(read_size % alignment == 0);                  // 读大小必须对齐
-        GGML_ASSERT(read_offset % alignment == 0);                // 偏移必须对齐
+        void *                dst_ptr     = (char *) dst + offset.n_size * batch_info[0].first;
+        GGML_ASSERT(((uintptr_t) dst) % alignment == 0);      // dst 必须对齐
+        GGML_ASSERT(((uintptr_t) dst_ptr) % alignment == 0);  // dst_ptr 必须对齐
+        GGML_ASSERT(read_size % alignment == 0);              // 读大小必须对齐
+        GGML_ASSERT(read_offset % alignment == 0);            // 偏移必须对齐
         // 可选 - 检查文件大小是否足够（假设 save_fd 仍然打开）
         off_t file_size = lseek(save_fd, 0, SEEK_END);
-        GGML_ASSERT(read_offset + read_size <= (size_t)file_size);
-
+        GGML_ASSERT(read_offset + read_size <= (size_t) file_size);
 
         // 获取IO上下文
         ExpertIOContext * ctx = ctx_queue.front();
@@ -400,24 +378,32 @@ class expert_loader {
         }
 
         ExpertIOContext * ctx = static_cast<ExpertIOContext *>(io_uring_cqe_get_data(cqe));
-        if (cqe->res > 0) {
-            // 复制数据到目标缓冲区
-            // uint8_t * read_pos = ctx->read_buf;
-            // memcpy(ctx->dst, read_pos, expert_size * ctx->expert_ids.size());
-        } 
-        else if (cqe->res < 0) {
-            fprintf(stderr, "[Expert Loader] Read failed: %s (%d), offset=%zu size=%zu dst=%p\n",
-        strerror(-cqe->res), -cqe->res, ctx->n_size * ctx->expert_ids[0], ctx->n_size, ctx->dst);
-                return false;
 
+        if (cqe->res <= 0) {
+            fprintf(stderr, "[Expert Loader] Read failed: %s (%d), offset=%zu size=%zu dst=%p\n", strerror(-cqe->res),
+                    -cqe->res, ctx->n_size * ctx->expert_ids[0], ctx->n_size, ctx->dst);
+            return false;
         }
 
         io_uring_cqe_seen(&ring, cqe);
-        //free(ctx->read_buf);
         ctx_queue.push(ctx);
         on_fly--;
         return true;
     }
+
+    void wait_upload_finish(int flag) {
+        auto start = std::chrono::high_resolution_clock::now();
+        while (on_fly > 0) {
+            process_completion();
+        }
+        auto end = std::chrono::high_resolution_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
+        if (flag == 1) {
+            g_load_time += duration;//expert加载
+        }
+        
+    }
+
 };
 
 inline bool parse_blk_ffn_exps(const char * str, int & layer_id, expert_weight & m) {

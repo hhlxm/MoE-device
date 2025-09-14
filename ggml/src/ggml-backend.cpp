@@ -758,8 +758,7 @@ static int ggml_backend_sched_backend_id_from_cur(ggml_backend_sched_t sched, st
     }
 
     //lxm
-    if  (tensor->op == MYML_OP_EXPERT_UPLOAD || 
-        tensor->op == MYML_OP_EXPERT_OFFLOAD ) {
+    if  (tensor->op == MYML_OP_EXPERT_UPLOAD_BEGIN || tensor->op == MYML_OP_EXPERT_UPLOAD_END || tensor->op == MYML_OP_EXPERT_OFFLOAD ) {
         return 0;
     }
 

@@ -521,7 +521,8 @@ extern "C" {
         GGML_OP_COUNT,
 
         //lxm: expert upload/offload
-        MYML_OP_EXPERT_UPLOAD,
+        MYML_OP_EXPERT_UPLOAD_BEGIN,
+        MYML_OP_EXPERT_UPLOAD_END,        
         MYML_OP_EXPERT_OFFLOAD,
     };
 
@@ -2202,14 +2203,19 @@ extern "C" {
     GGML_API bool                          ggml_threadpool_params_match  (const struct ggml_threadpool_params * p0, const struct ggml_threadpool_params * p1);
 
     //lxm: function define
-    GGML_API struct ggml_tensor * mygf_expert_upload(
+    GGML_API struct ggml_tensor * mygf_expert_upload_begin(
         struct ggml_context * ctx,
         struct ggml_tensor * gate_exps,
         struct ggml_tensor * up_exps,
         struct ggml_tensor * down_exps,
         struct ggml_tensor * selected_experts,//TODO
-        int il,
-        int m); // m: 0=gate, 1=up, 2=down
+        int il
+        ); 
+
+     GGML_API struct ggml_tensor * mygf_expert_upload_end(
+        struct ggml_context * ctx,
+        struct ggml_tensor * tensor,
+        int il); 
 
     GGML_API struct ggml_tensor * mygf_expert_offload(
         struct ggml_context * ctx,

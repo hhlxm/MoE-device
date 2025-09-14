@@ -972,7 +972,7 @@ int main(int argc, char ** argv) {
     
     
     LOG("\n\n");
-    LOG("Summary: \n|Total %ld Moe_layers | %ld expert/layer | %ld expert/layer used|\n\n",n_moe_layer,n_expert,n_expert_used);
+    LOG("Summary: \n|Total %u Moe_layers | %u expert/layer | %u expert/layer used|\n\n",n_moe_layer,n_expert,n_expert_used);
     LOG("Accumulated time: %.6f s\n", (unsigned long long) acc_time / 1000000.0);
     LOG("Accumulated count: %llu tokens\n", (unsigned long long) acc_count);
     LOG("\n");

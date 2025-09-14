@@ -2067,10 +2067,14 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
                 // nop
             } break;
         //lxm: support expert load op
-        case MYML_OP_EXPERT_UPLOAD:
+        case MYML_OP_EXPERT_UPLOAD_BEGIN:
             {
-                myml_compute_forward_expert_upload(params, tensor);
+                myml_compute_forward_expert_upload_begin(params, tensor);
             }break;  
+        case MYML_OP_EXPERT_UPLOAD_END:
+            {
+                myml_compute_forward_expert_upload_end(params, tensor);
+            }break;
         case MYML_OP_EXPERT_OFFLOAD:
             {
                 myml_compute_forward_expert_offload(params, tensor);
@@ -2362,7 +2366,8 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
             {
                 n_tasks = 1;
             } break;
-        case MYML_OP_EXPERT_UPLOAD:
+        case MYML_OP_EXPERT_UPLOAD_BEGIN:
+        case MYML_OP_EXPERT_UPLOAD_END:        
         case MYML_OP_EXPERT_OFFLOAD:
             {
                 n_tasks = 1; // Single-threaded I/O
@@ -2894,8 +2899,6 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
 
     for (int node_n = 0; node_n < cgraph->n_nodes && atomic_load_explicit(&tp->abort, memory_order_relaxed) != node_n; node_n++) {
         struct ggml_tensor * node = cgraph->nodes[node_n];
-        char * name = ggml_get_name(node);
-        char * sub = NULL;
         // if(state->ith == 0)
         // {
         //     printf("thread %d: processing node %d/%d (%s)\n", state->ith, node_n, cgraph->n_nodes, ggml_get_name(node));

@@ -1050,11 +1050,9 @@ static bool my_alloc_tensor_range(struct ggml_context * ctx,
 
     //lxm:获得一个分配器
     struct ggml_tallocr tallocr = my_ggml_tallocr_new(buffer);
-    int count = 0;
     //lxm:根据ctx上下文遍历当前backend上的tensor
     for (struct ggml_tensor * t = first; t != last; t = ggml_get_next_tensor(ctx, t)) {
         enum ggml_status status = GGML_STATUS_SUCCESS;
-        int layer_id,m;
         if (t->data == NULL) {
             if (t->view_src == NULL) {
                 status = my_ggml_tallocr_alloc(&tallocr, t);
@@ -1099,13 +1097,6 @@ static bool alloc_tensor_range(struct ggml_context * ctx,
     //lxm:根据ctx上下文遍历当前backend上的tensor
     for (struct ggml_tensor * t = first; t != last; t = ggml_get_next_tensor(ctx, t)) {
         enum ggml_status status = GGML_STATUS_SUCCESS;
-        int layer_id,m;
-        // if (parse_blk_ffn_exps(ggml_get_name(t), &layer_id, &m)) 
-        // {
-        //     printf("%s: skipping expert layer %d in tensor '%s'\n", __func__, layer_id, ggml_get_name(t));
-        //     ggml_tallocr_alloc(&tallocr, t);
-        //     continue;
-        // }
         if (t->data == NULL) {
             if (t->view_src == NULL) {
                 status = ggml_tallocr_alloc(&tallocr, t);
@@ -1133,7 +1124,6 @@ static bool alloc_tensor_range(struct ggml_context * ctx,
 ggml_backend_buffer_t my_ggml_backend_alloc_ctx_tensors_from_buft(struct ggml_context * ctx,struct ggml_tensor * t,int reduction,int origin_size) {
     GGML_ASSERT(ggml_get_no_alloc(ctx) == true);
     ggml_backend_buffer_type_t buft = t->buffer->buft;
-    size_t alignment = LXM_ALIGNMENT;//LXM_ALIGNMENT
     size_t max_size = ggml_backend_buft_get_max_size(buft);
 
     ggml_backend_buffer_t * buffers = NULL;
@@ -1143,27 +1133,27 @@ ggml_backend_buffer_t my_ggml_backend_alloc_ctx_tensors_from_buft(struct ggml_co
     struct ggml_tensor * first = ggml_get_first_tensor(ctx);
 
     //lxm:计算大小
-    for (struct ggml_tensor * t = first; t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+    for (struct ggml_tensor * iter_t = first; iter_t != NULL; iter_t = ggml_get_next_tensor(ctx, iter_t)) {
         int layer_id,m;
         //重新初始化指针
-        t->data=NULL;
-        t->buffer=NULL;
+        iter_t->data=NULL;
+        iter_t->buffer=NULL;
 
         size_t this_size = 0;
-        if(parse_blk_ffn_exps(ggml_get_name(t),&layer_id,&m))//每一层的大小缩减到reduction
+        if(parse_blk_ffn_exps(ggml_get_name(iter_t),&layer_id,&m))//每一层的大小缩减到reduction
         {
             //重新设定tensor大小，ne[2]:64->6 nb[2]:ne[1]*nb[1]
-            t->ne[2] = reduction;
+            iter_t->ne[2] = reduction;
             for (int i = 2; i < GGML_MAX_DIMS; i++) {
-                t->nb[i] = t->nb[i - 1] * t->ne[i - 1];
+                iter_t->nb[i] = iter_t->nb[i - 1] * iter_t->ne[i - 1];
             }
             // this_size = this_size/ reduction;
 
-            this_size = GGML_PAD(ggml_backend_buft_get_alloc_size(buft, t)/t->ne[2], LXM_ALIGNMENT)*t->ne[2];//align为每个专家都pad内存，方便后面的读取
+            this_size = GGML_PAD(ggml_backend_buft_get_alloc_size(buft, iter_t)/iter_t->ne[2], LXM_ALIGNMENT)*iter_t->ne[2];//align为每个专家都pad内存，方便后面的读取
 
         }else{
-            if (t->data == NULL && t->view_src == NULL) {
-                this_size = GGML_PAD(ggml_backend_buft_get_alloc_size(buft, t), LXM_ALIGNMENT);//都是一个align，因为offset是累加起来的
+            if (iter_t->data == NULL && iter_t->view_src == NULL) {
+                this_size = GGML_PAD(ggml_backend_buft_get_alloc_size(buft, iter_t), LXM_ALIGNMENT);//都是一个align，因为offset是累加起来的
             }
         }
 
@@ -1189,14 +1179,14 @@ ggml_backend_buffer_t my_ggml_backend_alloc_ctx_tensors_from_buft(struct ggml_co
     }
 
     //lxm:复原原来的大小
-    for (struct ggml_tensor * t = first; t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+    for (struct ggml_tensor * iter_t = first; iter_t != NULL; iter_t = ggml_get_next_tensor(ctx, iter_t)) {
         int layer_id,m;
-        if(parse_blk_ffn_exps(ggml_get_name(t),&layer_id,&m))//每一层的维度复原
+        if(parse_blk_ffn_exps(ggml_get_name(iter_t),&layer_id,&m))//每一层的维度复原
         {
             //重新设定tensor大小，ne[2]:64->6 nb[2]:ne[1]*nb[1]
-            t->ne[2] = origin_size;
+            iter_t->ne[2] = origin_size;
             for (int i = 2; i < GGML_MAX_DIMS; i++) {
-                t->nb[i] = t->nb[i - 1] * t->ne[i - 1];
+                iter_t->nb[i] = iter_t->nb[i - 1] * iter_t->ne[i - 1];
             }
             // this_size = this_size/ reduction;
         }
@@ -1233,12 +1223,6 @@ ggml_backend_buffer_t ggml_backend_alloc_ctx_tensors_from_buft(struct ggml_conte
     struct ggml_tensor * first = ggml_get_first_tensor(ctx);
     //lxm:计算大小
     for (struct ggml_tensor * t = first; t != NULL; t = ggml_get_next_tensor(ctx, t)) {
-        int layer_id,m;
-        // if (parse_blk_ffn_exps(ggml_get_name(t), &layer_id, &m)) 
-        // {
-        //     printf("%s: skipping expert layer %d in tensor '%s'\n", __func__, layer_id, ggml_get_name(t));
-        //     continue;
-        // }
         size_t this_size = 0;
         if (t->data == NULL && t->view_src == NULL) {
             this_size = GGML_PAD(ggml_backend_buft_get_alloc_size(buft, t), alignment);

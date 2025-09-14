@@ -106,9 +106,13 @@ void ggml_compute_forward_cross_entropy_loss_back(const struct ggml_compute_para
 void ggml_compute_forward_opt_step_adamw(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 
 //lxm:
-void myml_compute_forward_expert_upload(const struct ggml_compute_params * params, struct ggml_tensor * dst);
+void myml_compute_forward_expert_upload_begin(const struct ggml_compute_params * params, struct ggml_tensor * dst);
+void myml_compute_forward_expert_upload_end(const struct ggml_compute_params * params, struct ggml_tensor * dst);
+void myml_expert_upload_begin(const struct ggml_compute_params * params, struct ggml_tensor * dst);
+void myml_expert_upload_end(const struct ggml_compute_params * params, struct ggml_tensor * dst);
+
+
 void myml_compute_forward_expert_offload(const struct ggml_compute_params * params, struct ggml_tensor * dst);
-void myml_expert_upload(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void myml_expert_offload(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 
 #ifdef __cplusplus

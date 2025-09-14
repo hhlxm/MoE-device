@@ -430,7 +430,7 @@ bool llama_model::reset_pimpl_bufs(ggml_backend_buffer_t buf)const
         cnt++;
     }
     GGML_ABORT("failed to reset pimpl bufs for buffer %s", buf->buft);
-    return false;//wtf????
+    return false;
 }
 
 void llama_model::load_hparams(llama_model_loader & ml) {
