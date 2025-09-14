@@ -1175,6 +1175,7 @@ bool llama_model_loader::load_all_data(
 }
 
 
+//动态加载的东西跳过
 bool llama_model_loader::my_load_all_data(
         struct ggml_context * ctx,
         llama_buf_map & bufs,
@@ -1288,7 +1289,7 @@ bool llama_model_loader::my_load_all_data(
             continue;
         }
 
-        if (parse_blk_ffn_exps(name, layer_id, m)) {//动态加载的东西跳过
+        if (parse_blk_ffn_exps(name, layer_id, m)) {
             continue;
         }
 

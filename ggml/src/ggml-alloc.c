@@ -1140,7 +1140,7 @@ ggml_backend_buffer_t my_ggml_backend_alloc_ctx_tensors_from_buft(struct ggml_co
         iter_t->buffer=NULL;
 
         size_t this_size = 0;
-        if(parse_blk_ffn_exps(ggml_get_name(iter_t),&layer_id,&m))//每一层的大小缩减到reduction
+        if(parse_blk_ffn_exps(ggml_get_name(iter_t),&layer_id,&m))//**每一层的大小缩减到reduction**
         {
             //重新设定tensor大小，ne[2]:64->6 nb[2]:ne[1]*nb[1]
             iter_t->ne[2] = reduction;

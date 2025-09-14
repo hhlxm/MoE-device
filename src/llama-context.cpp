@@ -994,6 +994,9 @@ int llama_context::decode(llama_batch & inp_batch) {
             // needs to happen before the graph is built
             n_outputs = n_outputs_new;
         }
+
+        //lxm: buffer manage
+        //TODO: 如果输入的token为1，那无法判断是prefill 还是 decode
         {  
             if(j_decode == 0 && ubatch.n_tokens==1)
             {
@@ -1021,6 +1024,7 @@ int llama_context::decode(llama_batch & inp_batch) {
                     auto * buf = my_ggml_backend_alloc_ctx_tensors_from_buft(
                         ctx, first, model.hparams.n_expert_used, model.hparams.n_expert);
                     ggml_backend_buffer_set_usage(buf, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+                    //清除原来的buffer
                     model.reset_pimpl_bufs(buf);
 
                     if (num_oth != 0) {
