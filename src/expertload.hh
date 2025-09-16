@@ -187,6 +187,7 @@ class expert_loader {
         int p1   = 0;
         int size = expert_ids.size();
         // printf("[Expert Loader] Read layer %d experts %ld\n", layer_id, size);
+        //idx 配合算子正确选到专家
         int idx  = 0;
         while (p1 < size) {
             int p2 = p1;

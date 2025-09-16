@@ -1239,6 +1239,35 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     };
 
+    //lxm:
+    add_opt(common_arg(
+        {"-peek-mem-control", "--peek-mem-control"},
+        "Control peek mem usage",
+        [](common_params & params) {
+            params.peek_mem_control = true;
+        }
+    ).set_env("LLAMA_ARG_MLOCK"));
+    add_opt(common_arg(
+        {"-peek-mem-layers", "--peek-mem-layers"}, "N",
+        string_format("max number of layers to peek (default: %d)", params.peek_mem_layers),
+        [](common_params & params, int value) {
+            params.peek_mem_layers = value;
+        }
+    ));
+    add_opt(common_arg(
+        {"-exp-off", "--expert-offload"},
+        "offload expert parameters to disk",
+        [](common_params & params) {
+            params.expert_offload = true;
+        }
+        ));
+    add_opt(common_arg(
+        {"-mem-exp", "--max-expert-memory"}, "N",
+        string_format("max number of experts in memory (default: %d)", params.max_expert_memory),
+        [](common_params & params, int value) {
+            params.max_expert_memory = value;
+        }
+    ));
 
     add_opt(common_arg(
         {"-h", "--help", "--usage"},
@@ -3343,22 +3372,5 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.n_cache_reuse = 256;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}));
-
-    //lxm:
-    add_opt(common_arg(
-        {"-exp-off", "--expert-offload"},
-        "offload expert parameters to disk",
-        [](common_params & params) {
-            params.expert_offload = true;
-        }
-        ));
-    add_opt(common_arg(
-        {"-mem-exp", "--max-expert-memory"}, "N",
-        string_format("max number of experts in memory (default: %d)", params.max_expert_memory),
-        [](common_params & params, int value) {
-            params.max_expert_memory = value;
-        }
-    ));
-
     return ctx_arg;
 }

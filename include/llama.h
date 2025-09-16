@@ -321,6 +321,10 @@ extern "C" {
         bool use_mmap;      // use mmap if possible
         bool use_mlock;     // force system to keep model in RAM
         bool check_tensors; // validate model tensor data
+
+        //peek mem control
+        bool peek_mem_control; //Control memory usage during prefill
+        int32_t peek_mem_layers; //Number of layers to peek during prefill
     };
 
     // NOTE: changing the default values of parameters marked as [EXPERIMENTAL] may cause crashes or incorrect results in certain configurations
