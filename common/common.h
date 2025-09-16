@@ -437,6 +437,10 @@ struct common_params {
     //lxm: params for expert offloading
     bool expert_offload=true; // Enable expert offload to disk
     int32_t max_expert_memory=6; // Max number of experts in memory
+
+    //lxm: peek memory control during prefill
+    bool peek_mem_control=false; // Enable peek memory control during prefill
+    int32_t peek_mem_layers=8; // Number of layers to peek during prefill
 };
 
 // call once at the start of a program if it uses libcommon

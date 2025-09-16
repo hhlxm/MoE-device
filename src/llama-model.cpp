@@ -4147,7 +4147,12 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
 
     // Ensure we have enough capacity for the maximum backend buffer we will potentially create
     const size_t n_max_backend_buffer = ctx_map.size() * ml.files.size();
-    pimpl->bufs.reserve(n_max_backend_buffer);
+    if (params.peek_mem_control) {
+        pimpl->bufs.reserve(( hparams.n_layer-hparams.n_layer_dense_lead)*hparams.n_expert*3 + n_max_backend_buffer); // 26*64*3 is a rough estimate for the number of buffers in a typical model
+    } else {
+        pimpl->bufs.reserve(n_max_backend_buffer);
+    }
+
 
     //lxm:创建后台缓存区，遍历不同的后端
     for (auto & it : ctx_map) {
@@ -4161,7 +4166,12 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
         }
 
         llama_buf_map buf_map;
-        buf_map.reserve(n_max_backend_buffer);
+        if (params.peek_mem_control) {
+            buf_map.reserve(( hparams.n_layer-hparams.n_layer_dense_lead)*hparams.n_expert*3 + n_max_backend_buffer);
+        }
+        else {
+            buf_map.reserve(n_max_backend_buffer);
+        }
 
         // check if it is possible to use buffer_from_host_ptr with this buffer type
         ggml_backend_dev_t dev = ggml_backend_buft_get_device(buft);
@@ -4177,29 +4187,38 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
         bool buffer_from_host_ptr_supported = props.caps.buffer_from_host_ptr;
         bool is_default_buft = buft == ggml_backend_dev_buffer_type(dev);
 
-        if (ml.use_mmap && use_mmap_buffer && buffer_from_host_ptr_supported && is_default_buft) 
+
+        assert(ml.use_mmap == false);
+        //lxm:创建缓存区
+        if(params.peek_mem_control)
         {
+            //lxm:创建缓存区
+            size_t n_buffers = 0;
+            ggml_backend_buffer_t* buf = my2_ggml_backend_alloc_ctx_tensors_from_buft(ctx, buft,&n_buffers);//load模型阶段为每个expert的每个维度分配一块buffer
+            if (buf == nullptr) {
+                continue;
+                throw std::runtime_error(format("unable to allocate %s buffer", ggml_backend_buft_name(buft)));
+            }
+            for(size_t i = 0 ;i<n_buffers;i++)
+            {
+                pimpl->bufs.emplace_back(buf[i]);
+            }
+            if (use_mlock && ggml_backend_buffer_is_host(buf[0])) {
+                // pimpl->mlock_bufs.emplace_back(new llama_mlock);
+                // auto & mlock_buf = pimpl->mlock_bufs.back();
+                // mlock_buf->init   (ggml_backend_buffer_get_base(buf));
+                // mlock_buf->grow_to(ggml_backend_buffer_get_size(buf));
+                throw std::runtime_error("not support mlock");
+            }
             for (uint32_t idx = 0; idx < ml.files.size(); idx++) {
-                // only the mmap region containing the tensors in the model is mapped to the backend buffer
-                // this is important for metal with apple silicon: if the entire model could be mapped to a metal buffer, then we could just use metal for all layers
-                // this allows using partial offloading when the model size exceeds the metal buffer size, but not the RAM size
-                void * addr = nullptr;
-                size_t first, last; // NOLINT
-                ml.get_mapping_range(&first, &last, &addr, idx, ctx);
-                if (first >= last) {
-                    continue;
+                for(size_t i = 0 ;i<n_buffers;i++)
+                {
+                    buf_map.emplace(idx, buf[i]);
                 }
-                const size_t max_size = ggml_get_max_tensor_size(ctx);
-                ggml_backend_buffer_t buf = ggml_backend_dev_buffer_from_host_ptr(dev, (char *) addr + first, last - first, max_size);
-                if (buf == nullptr) {
-                    throw std::runtime_error(format("mmap unable to allocate %s buffer", ggml_backend_buft_name(buft)));
-                }
-                pimpl->bufs.emplace_back(buf);
-                buf_map.emplace(idx, buf);
             }
         }
-        else {
-            //lxm:创建缓存区
+        else
+        {
             ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx, buft);
             if (buf == nullptr) {
                 continue;
@@ -4228,6 +4247,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
         }
 
         ctx_bufs.emplace_back(ctx, buf_map);
+        
     }
 
     if (llama_supports_gpu_offload()) {
@@ -4262,8 +4282,19 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
     for (auto & it : ctx_bufs) {
         ggml_context * ctx = it.first;
         auto & bufs = it.second;
-        if (!ml.load_all_data(ctx, bufs, use_mlock ? &pimpl->mlock_mmaps : NULL, params.progress_callback, params.progress_callback_user_data)) {
-            return false;
+        if (params.peek_mem_control)
+        {
+            //TODO
+            assert(params.peek_mem_layers>=0&&params.peek_mem_layers<=hparams.n_layer-hparams.n_layer_dense_lead);
+            if (!ml.my2_load_all_data(ctx, bufs, use_mlock ? &pimpl->mlock_mmaps : NULL, params.progress_callback, params.progress_callback_user_data, params.peek_mem_layers)) {
+                return false;
+            }
+        }
+        else
+        {
+            if (!ml.load_all_data(ctx, bufs, use_mlock ? &pimpl->mlock_mmaps : NULL, params.progress_callback, params.progress_callback_user_data)) {
+                return false;
+            }
         }
     }
 
@@ -13591,6 +13622,8 @@ llama_model_params llama_model_default_params() {
         /*.use_mmap                    =*/ true,
         /*.use_mlock                   =*/ false,
         /*.check_tensors               =*/ false,
+        /*.peek_mem_control            =*/ false,
+        /*.peek_mem_layers             =*/ 8,
     };
 
 #ifdef GGML_USE_METAL
